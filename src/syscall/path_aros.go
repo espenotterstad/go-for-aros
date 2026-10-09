@@ -34,7 +34,8 @@ func arosVolumeLen(path string) int {
 //
 // It cleans first. A ".." that would climb above a volume ("Work:..") and a
 // ':' outside the volume name are EINVAL; "" is ENOENT (dos would read it
-// as the current directory).
+// as the current directory). A result of "*" is EINVAL: dos Open reads that
+// name as the console (rom/dos/open.c).
 func arosPath(p string) (string, error) {
 	if p == "" {
 		return "", ENOENT
@@ -93,6 +94,9 @@ func arosPath(p string) (string, error) {
 			b = append(b, '/')
 		}
 		b = append(b, e...)
+	}
+	if string(b) == "*" {
+		return "", EINVAL
 	}
 	return string(b), nil
 }
