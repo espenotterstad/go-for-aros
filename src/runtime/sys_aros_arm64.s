@@ -27,8 +27,9 @@ TEXT runtime·exit(SB),NOSPLIT|NOFRAME,$0-4
 	B	runtime·arosLeave(SB)
 
 // arosLeave returns R0 (the exit code) to the C startup: back on the shell's
-// stack it closes timer.device, frees the heap and the g0 stack, restores the
-// task's stack bounds and trap code and the C registers saved by main.
+// stack it gives back m0's timer port, request and semaphore signal, closes
+// timer.device, frees the heap and the g0 stack, restores the task's stack
+// bounds and trap code and the C registers saved by main.
 TEXT runtime·arosLeave(SB),NOSPLIT|NOFRAME,$0
 	MOVW	R0, R19
 	MOVD	$runtime·arosCSave(SB), R20
@@ -36,6 +37,56 @@ TEXT runtime·arosLeave(SB),NOSPLIT|NOFRAME,$0
 	MOVD	R10, RSP
 	MOVD	runtime·arosSysBase(SB), R21
 
+	// m0's timed-wait request and port (minit) and semaphore signal
+	// (semacreate) belong to the shell's process: give them back, with no
+	// signal left pending. A request still at timer.device (a fault inside
+	// semasleep or usleep) is aborted first.
+	MOVD	$runtime·m0(SB), R22
+	MOVD	(m_mOS+mOS_treq)(R22), R0
+	CBZ	R0, notreq
+	MOVWU	(m_mOS+mOS_tbusy)(R22), R10
+	CBZ	R10, treqidle
+	MOVD	R21, R1
+	MOVD	-(8*const__LVO_AbortIO)(R21), R9
+	BL	(R9)
+	MOVD	(m_mOS+mOS_treq)(R22), R0
+	MOVD	R21, R1
+	MOVD	-(8*const__LVO_WaitIO)(R21), R9
+	BL	(R9)
+	MOVD	(m_mOS+mOS_treq)(R22), R0
+treqidle:
+	MOVD	R21, R1
+	MOVD	-(8*const__LVO_DeleteIORequest)(R21), R9
+	BL	(R9)
+notreq:
+	MOVD	(m_mOS+mOS_port)(R22), R23
+	CBZ	R23, noport
+	MOVBU	const__MsgPort_mp_SigBit(R23), R10
+	MOVD	$1, R1
+	LSL	R10, R1, R1
+	MOVD	ZR, R0
+	MOVD	R21, R2
+	MOVD	-(8*const__LVO_SetSignal)(R21), R9
+	BL	(R9)
+	MOVD	R23, R0
+	MOVD	R21, R1
+	MOVD	-(8*const__LVO_DeleteMsgPort)(R21), R9
+	BL	(R9)
+noport:
+	MOVW	(m_mOS+mOS_sigbit)(R22), R23
+	CBZ	R23, nosem
+	SUB	$1, R23
+	MOVD	$1, R1
+	LSL	R23, R1, R1
+	MOVD	ZR, R0
+	MOVD	R21, R2
+	MOVD	-(8*const__LVO_SetSignal)(R21), R9
+	BL	(R9)
+	MOVD	R23, R0
+	MOVD	R21, R1
+	MOVD	-(8*const__LVO_FreeSignal)(R21), R9
+	BL	(R9)
+nosem:
 	MOVWU	runtime·arosTimerOpen(SB), R10
 	CBZ	R10, notimer
 	MOVD	$runtime·arosTimerReq(SB), R0

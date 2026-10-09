@@ -63,6 +63,9 @@ func arosvec(base, lvo uintptr) uintptr {
 type mOS struct {
 	task   uintptr // exec task running this M
 	sigbit int32   // exec signal for semasleep + 1; 0 = not allocated yet
+	tbusy  uint32  // 1 while treq is at timer.device (arosLeave aborts it)
+	port   uintptr // treq's reply port; it signals the task that created it
+	treq   uintptr // struct timerequest for timed waits, made by minit
 }
 
 type sigset struct{}
@@ -150,7 +153,28 @@ func mpreinit(mp *m) {
 }
 
 func minit() {
-	getg().m.task = aroscall(arosvec(arosSysBase, _LVO_FindTask), 0, arosSysBase, 0, 0, 0, 0)
+	mp := getg().m
+	mp.task = aroscall(arosvec(arosSysBase, _LVO_FindTask), 0, arosSysBase, 0, 0, 0, 0)
+	arosTimerInit(mp)
+}
+
+// arosTimerInit gives mp a reply port and a timerequest for timed waits. A
+// port signals the task that created it, so each M makes its own, here on its
+// own task. The request copies osinit's open one (same device and unit), so
+// it needs no OpenDevice of its own. arosLeave frees m0's.
+func arosTimerInit(mp *m) {
+	mp.port = aroscall(arosvec(arosSysBase, _LVO_CreateMsgPort), arosSysBase, 0, 0, 0, 0, 0)
+	if mp.port == 0 {
+		throw("aros: cannot create a message port")
+	}
+	req := aroscall(arosvec(arosSysBase, _LVO_CreateIORequest), mp.port, _sizeof_timerequest, arosSysBase, 0, 0, 0)
+	if req == 0 {
+		throw("aros: cannot create a timerequest")
+	}
+	tr := uintptr(unsafe.Pointer(&arosTimerReq[0]))
+	*(*uintptr)(unsafe.Pointer(req + _IORequest_io_Device)) = *(*uintptr)(unsafe.Pointer(tr + _IORequest_io_Device))
+	*(*uintptr)(unsafe.Pointer(req + _IORequest_io_Unit)) = *(*uintptr)(unsafe.Pointer(tr + _IORequest_io_Unit))
+	mp.treq = req
 }
 
 func unminit()       {}
@@ -193,14 +217,62 @@ func semacreate(mp *m) {
 	mp.sigbit = int32(bit) + 1
 }
 
+// semasleep waits for semawakeup, at most ns nanoseconds if ns >= 0: 0 when
+// woken, -1 on timeout (lock_sema.go).
+//
 //go:nosplit
 func semasleep(ns int64) int32 {
 	mp := getg().m
-	if ns >= 0 {
-		throw("aros: timed semasleep: milestone 2-3")
+	sem := uintptr(1) << uint(mp.sigbit-1)
+	if ns < 0 {
+		aroscall(arosvec(arosSysBase, _LVO_Wait), sem, arosSysBase, 0, 0, 0, 0)
+		return 0
 	}
-	aroscall(arosvec(arosSysBase, _LVO_Wait), 1<<uint(mp.sigbit-1), arosSysBase, 0, 0, 0, 0)
-	return 0
+	if mp.treq == 0 {
+		throw("aros: timed semasleep before minit")
+	}
+	arosTimerSet(mp.treq, ns/1000)
+	mp.tbusy = 1
+	aroscall(arosvec(arosSysBase, _LVO_SendIO), mp.treq, arosSysBase, 0, 0, 0, 0)
+	got := aroscall(arosvec(arosSysBase, _LVO_Wait), sem|arosPortMask(mp), arosSysBase, 0, 0, 0, 0)
+	// AbortIO does nothing once the timer has fired; WaitIO then takes the
+	// request off the reply port either way.
+	aroscall(arosvec(arosSysBase, _LVO_AbortIO), mp.treq, arosSysBase, 0, 0, 0, 0)
+	aroscall(arosvec(arosSysBase, _LVO_WaitIO), mp.treq, arosSysBase, 0, 0, 0, 0)
+	mp.tbusy = 0
+	arosClearPort(mp)
+	if got&sem != 0 {
+		return 0
+	}
+	return -1
+}
+
+// arosTimerSet makes req a TR_ADDREQUEST for usec microseconds.
+//
+//go:nosplit
+func arosTimerSet(req uintptr, usec int64) {
+	secs := usec / 1e6
+	if secs > 1<<31-1 {
+		secs = 1<<31 - 1 // tv_secs is a ULONG; 68 years is forever here
+	}
+	*(*uint16)(unsafe.Pointer(req + _IORequest_io_Command)) = _TR_ADDREQUEST
+	*(*uint32)(unsafe.Pointer(req + _timerequest_tr_time)) = uint32(secs)
+	*(*uint32)(unsafe.Pointer(req + _timerequest_tr_time + 4)) = uint32(usec % 1e6)
+}
+
+// arosPortMask is the signal mask of mp's reply port.
+//
+//go:nosplit
+func arosPortMask(mp *m) uintptr {
+	return uintptr(1) << *(*uint8)(unsafe.Pointer(mp.port + _MsgPort_mp_SigBit))
+}
+
+// arosClearPort clears the reply-port signal WaitIO leaves set when the
+// request was already back (it only Waits for one still out).
+//
+//go:nosplit
+func arosClearPort(mp *m) {
+	aroscall(arosvec(arosSysBase, _LVO_SetSignal), 0, arosPortMask(mp), arosSysBase, 0, 0, 0)
 }
 
 //go:nosplit
@@ -242,16 +314,31 @@ func walltime() (sec int64, nsec int32) {
 	return int64(tv.secs) + arosEpochOffset, int32(tv.micro) * 1000
 }
 
-// usleep sleeps in whole dos ticks (20 ms); a timer.device wait is milestone 2.
+// usleep waits on the M's timerequest (5 ms steps on hosted, F18b). Before
+// minit it falls back to usleep_no_g.
 //
 //go:nosplit
 func usleep(usec uint32) {
+	mp := getg().m
+	if mp == nil || mp.treq == 0 {
+		usleep_no_g(usec)
+		return
+	}
+	arosTimerSet(mp.treq, int64(usec))
+	mp.tbusy = 1
+	aroscall(arosvec(arosSysBase, _LVO_DoIO), mp.treq, arosSysBase, 0, 0, 0, 0)
+	mp.tbusy = 0
+	arosClearPort(mp)
+}
+
+// usleep_no_g sleeps in whole dos ticks (20 ms): without a g there is no M,
+// so no timerequest.
+//
+//go:nosplit
+func usleep_no_g(usec uint32) {
 	ticks := (uintptr(usec)*_TICKS_PER_SECOND + 999999) / 1000000
 	aroscall(arosvec(arosDOSBase, _LVO_Delay), ticks, arosDOSBase, 0, 0, 0, 0)
 }
-
-//go:nosplit
-func usleep_no_g(usec uint32) { usleep(usec) }
 
 // Stubs so export_test.go type-checks (go vet runtime); nothing calls them on
 // aros (windows has the same).
