@@ -252,3 +252,18 @@ func usleep(usec uint32) {
 
 //go:nosplit
 func usleep_no_g(usec uint32) { usleep(usec) }
+
+// Stubs so export_test.go type-checks (go vet runtime); nothing calls them on
+// aros (windows has the same).
+func open(name *byte, mode, perm int32) int32 {
+	throw("unimplemented")
+	return -1
+}
+func closefd(fd int32) int32 {
+	throw("unimplemented")
+	return -1
+}
+func read(fd int32, p unsafe.Pointer, n int32) int32 {
+	throw("unimplemented")
+	return -1
+}
