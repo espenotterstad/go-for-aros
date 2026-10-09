@@ -480,3 +480,27 @@ func read(fd int32, p unsafe.Pointer, n int32) int32 {
 	throw("unimplemented")
 	return -1
 }
+
+// The bridge for package syscall (milestone 2b). Each call is a system call
+// on g0, as every AROS call is (go/HANDOFF.md D11); IoErr is read in the
+// same one, so no other goroutine's dos call can come between.
+//
+//go:linkname syscall_aroscall syscall.aroscall
+//go:nosplit
+//go:uintptrkeepalive
+func syscall_aroscall(fn, a0, a1, a2, a3, a4, a5 uintptr) (r, ioerr uintptr) {
+	entersyscall()
+	r = aroscall(fn, a0, a1, a2, a3, a4, a5)
+	ioerr = aroscall(arosvec(arosDOSBase, _LVO_IoErr), arosDOSBase, 0, 0, 0, 0, 0)
+	exitsyscall()
+	return
+}
+
+//go:linkname syscall_arosBases syscall.arosBases
+func syscall_arosBases() (sysBase, dosBase uintptr) { return arosSysBase, arosDOSBase }
+
+// syscall_arosShellDir is the shell's current directory: syscall.Chdir
+// must not unlock it (arosLeave gives it back).
+//
+//go:linkname syscall_arosShellDir syscall.arosShellDir
+func syscall_arosShellDir() uintptr { return arosShellDir }

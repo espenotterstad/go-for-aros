@@ -42,6 +42,7 @@ const (
 	_LVO_HostLib_GetPointer = 3   // hostlib
 	_LVO_HostLib_Lock       = 7   // hostlib
 	_LVO_HostLib_Unlock     = 8   // hostlib
+	_LVO_IoErr              = 22  // dos
 )
 
 const (
