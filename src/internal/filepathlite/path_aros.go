@@ -23,8 +23,7 @@ func IsPathSeparator(c uint8) bool {
 }
 
 // isLocal also rejects a rooted path ("/x" is on the current volume's
-// root) and any ':', which unixIsLocal doesn't see: Clean can turn
-// "x/../Work:y" into the volume path "Work:y", and no dos name holds a ':'.
+// root) and any ':', which unixIsLocal doesn't see: no dos name holds one.
 func isLocal(path string) bool {
 	if stringslite.HasPrefix(path, "/") || bytealg.IndexByteString(path, ':') >= 0 {
 		return false
@@ -57,4 +56,21 @@ func volumeNameLen(path string) int {
 		}
 	}
 	return 0
+}
+
+// postClean keeps Clean from turning a relative path into a volume path, as
+// on Windows: "x/../Work:y" cleans to "./Work:y", not "Work:y".
+func postClean(out *lazybuf) {
+	if out.volLen != 0 || out.buf == nil {
+		return
+	}
+	for _, c := range out.buf {
+		if IsPathSeparator(c) {
+			break
+		}
+		if c == ':' {
+			out.prepend('.', Separator)
+			return
+		}
+	}
 }
