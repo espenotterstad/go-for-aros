@@ -104,6 +104,7 @@ var okgoos = []string{
 	"plan9",
 	"windows",
 	"aix",
+	"aros",
 }
 
 // xinit handles initialization of the various global state, like goroot and goarch.
@@ -1783,6 +1784,7 @@ func checkNotStale(env []string, goBinary string, targets ...string) {
 // by 'go tool dist list'.
 var cgoEnabled = map[string]bool{
 	"aix/ppc64":       true,
+	"aros/arm64":      false,
 	"darwin/amd64":    true,
 	"darwin/arm64":    true,
 	"dragonfly/amd64": true,

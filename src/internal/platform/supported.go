@@ -113,6 +113,10 @@ func MustLinkExternal(goos, goarch string, withCgo bool) bool {
 		if goarch != "arm64" {
 			return true
 		}
+	case "aros":
+		// AROS loads relocatable ELF through LoadSeg; only AROS's C driver
+		// and startup produce it (go/HANDOFF.md D8).
+		return true
 	case "ios":
 		if goarch == "arm64" {
 			return true
