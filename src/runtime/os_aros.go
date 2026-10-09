@@ -504,3 +504,9 @@ func syscall_arosBases() (sysBase, dosBase uintptr) { return arosSysBase, arosDO
 //
 //go:linkname syscall_arosShellDir syscall.arosShellDir
 func syscall_arosShellDir() uintptr { return arosShellDir }
+
+// time_arosLocalOffset gives package time the zone offset in seconds east
+// of UTC for Local's fixed zone (go/HANDOFF.md D20, D21).
+//
+//go:linkname time_arosLocalOffset time.arosLocalOffset
+func time_arosLocalOffset() int { return int(-arosUTCOffset) }
