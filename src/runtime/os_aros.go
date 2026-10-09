@@ -34,6 +34,7 @@ var (
 	arosFaulted                             uint32  // set by arosTrap when it sends a fault to arosFault
 	arosFaultCode, arosFaultPC              uintptr
 	arosTrapDepth                           uintptr // deepest trap frame below a faulting goroutine's sp so far (D12)
+	arosUTCOffset                           int64   // UTC minus AROS's clock in seconds, set by osinit (D21)
 )
 
 // cstr returns the address of s's bytes for an AROS call; s must end in "\x00".
@@ -81,6 +82,7 @@ func osinit() {
 	numCPUStartup = getCPUCount()
 	arosOpenTimer()
 	arosAllocHeap()
+	arosUTCOffset = arosFindUTCOffset()
 }
 
 func getCPUCount() int32 { return 1 } // one M until milestone 3
@@ -330,7 +332,7 @@ func write1(fd uintptr, p unsafe.Pointer, n int32) int32 {
 type arosTimeval struct{ secs, micro uint32 }
 
 // AROS's system time counts from 1978-01-01, Unix time from 1970-01-01.
-const arosEpochOffset = 252460800
+const arosEpochOffset = 252460800 // 2922 days
 
 //go:nosplit
 func nanotime1() int64 {
@@ -339,10 +341,81 @@ func nanotime1() int64 {
 	return int64(tv.secs)*1e9 + int64(tv.micro)*1e3
 }
 
-func walltime() (sec int64, nsec int32) {
+// arosLocalTime reads AROS's clock, which runs on local time (F19), in
+// seconds since the Unix epoch.
+//
+//go:nosplit
+func arosLocalTime() (sec int64, nsec int32) {
 	var tv arosTimeval
 	aroscall(arosvec(arosTimerBase, _LVO_GetSysTime), uintptr(noescape(unsafe.Pointer(&tv))), arosTimerBase, 0, 0, 0, 0)
 	return int64(tv.secs) + arosEpochOffset, int32(tv.micro) * 1000
+}
+
+func walltime() (sec int64, nsec int32) {
+	sec, nsec = arosLocalTime()
+	return sec + arosUTCOffset, nsec
+}
+
+// arosFindUTCOffset returns UTC minus AROS's clock in seconds (go/HANDOFF.md
+// D21): from the host on hosted AROS, else from the locale.
+func arosFindUTCOffset() int64 {
+	if off, ok := arosHostUTCOffset(); ok {
+		return off
+	}
+	return int64(arosLocaleGMTOffset()) * 60
+}
+
+// arosHostUTCOffset asks the host's C library for UTC through hostlib.resource,
+// which only hosted AROS has, as the hosted battclock does
+// (arch/all-unix/battclock/battclock_init.c). AROS's clock is set in whole
+// seconds and lags the host by a second or two (F19), so the difference is
+// rounded to a minute: Go's time then agrees with AROS's own (file dates).
+func arosHostUTCOffset() (int64, bool) {
+	hl := aroscall(arosvec(arosSysBase, _LVO_OpenResource), cstr("hostlib.resource\x00"), arosSysBase, 0, 0, 0, 0)
+	if hl == 0 {
+		return 0, false
+	}
+	var libc uintptr
+	for _, name := range [...]string{"libSystem.dylib\x00", "libc.so.6\x00", "libc.so\x00"} {
+		if libc = aroscall(arosvec(hl, _LVO_HostLib_Open), cstr(name), 0, hl, 0, 0, 0); libc != 0 {
+			break
+		}
+	}
+	if libc == 0 {
+		return 0, false
+	}
+	var off int64
+	hosttime := aroscall(arosvec(hl, _LVO_HostLib_GetPointer), libc, cstr("time\x00"), 0, hl, 0, 0)
+	if hosttime != 0 {
+		aroscall(arosvec(hl, _LVO_HostLib_Lock), hl, 0, 0, 0, 0, 0)
+		utc := int64(aroscall(hosttime, 0, 0, 0, 0, 0, 0)) // host time(NULL)
+		aroscall(arosvec(hl, _LVO_HostLib_Unlock), hl, 0, 0, 0, 0, 0)
+		local, _ := arosLocalTime()
+		if d := utc - local; d >= 0 {
+			off = (d + 30) / 60 * 60
+		} else {
+			off = -((-d + 30) / 60 * 60)
+		}
+	}
+	aroscall(arosvec(hl, _LVO_HostLib_Close), libc, 0, hl, 0, 0, 0)
+	return off, hosttime != 0
+}
+
+// arosLocaleGMTOffset returns the locale's loc_GMTOffset: minutes from AROS's
+// clock to UTC, AmigaOS sign (minutes west; workbench/c/SetClock.c). 0 if
+// locale.library doesn't open. AROS's locale has no DST (F19).
+func arosLocaleGMTOffset() int32 {
+	lb := aroscall(arosvec(arosSysBase, _LVO_OpenLibrary), cstr("locale.library\x00"), 0, arosSysBase, 0, 0, 0)
+	if lb == 0 {
+		return 0
+	}
+	var off int32
+	if loc := aroscall(arosvec(lb, _LVO_OpenLocale), 0, lb, 0, 0, 0, 0); loc != 0 {
+		off = *(*int32)(unsafe.Pointer(loc + _Locale_loc_GMTOffset))
+		aroscall(arosvec(lb, _LVO_CloseLocale), loc, lb, 0, 0, 0, 0)
+	}
+	aroscall(arosvec(arosSysBase, _LVO_CloseLibrary), lb, arosSysBase, 0, 0, 0, 0)
+	return off
 }
 
 // usleep waits on the M's timerequest (5 ms steps on hosted, F18b). Before
