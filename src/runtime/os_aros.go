@@ -172,7 +172,7 @@ func arosFatalFault() {
 	print("fatal error: aros: memory fault (trap ", arosFaultCode, ") at pc=", hex(arosFaultPC), " (fault handling: milestone 2)\n")
 }
 
-func crash() { exit(2) }
+func crash() { exit(crashExitCode) }
 
 //go:nosplit
 func osyield() {} // one M: nothing to yield to inside Go (milestone 3)

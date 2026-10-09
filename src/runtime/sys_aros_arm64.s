@@ -106,7 +106,7 @@ again:
 
 // arosFault is where a faulting task resumes. R28 may not be g (C code may
 // have faulted), so take m0's g0 and the top of its stack, report the fault
-// and leave with exit code 2. Go's own fault handling (sigpanic) is milestone 2.
+// and leave with crashExitCode. Go's own fault handling (sigpanic) is milestone 2.
 TEXT runtime·arosFault(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
 	MOVD	$runtime·g0(SB), g
 	MOVD	(g_stack+stack_hi)(g), R10
@@ -114,5 +114,5 @@ TEXT runtime·arosFault(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
 	MOVD	ZR, R29
 	MOVD	ZR, R30
 	BL	runtime·arosFatalFault(SB)
-	MOVW	$2, R0
+	MOVW	$const_crashExitCode, R0
 	B	runtime·arosLeave(SB)

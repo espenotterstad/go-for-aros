@@ -1444,7 +1444,7 @@ func fatalthrow(t throwType) {
 	// things worse if the runtime is in a bad state.
 	systemstack(func() {
 		if isSecureMode() {
-			exit(2)
+			exit(crashExitCode)
 		}
 
 		startpanic_m()
@@ -1456,7 +1456,7 @@ func fatalthrow(t throwType) {
 			crash()
 		}
 
-		exit(2)
+		exit(crashExitCode)
 	})
 
 	*(*int)(nil) = 0 // not reached
@@ -1505,7 +1505,7 @@ func fatalpanic(msgs *_panic) {
 	}
 
 	systemstack(func() {
-		exit(2)
+		exit(crashExitCode)
 	})
 
 	*(*int)(nil) = 0 // not reached

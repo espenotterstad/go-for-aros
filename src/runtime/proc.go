@@ -8175,3 +8175,8 @@ func doInit1(t *initTask) {
 		t.state = 2 // initialization done
 	}
 }
+
+// crashExitCode is the exit code of a crash (panic, throw, fatal signal): 2,
+// or on aros RETURN_FAIL (20), as AROS's C abort() and fatal signals give;
+// exit codes a program passes to os.Exit stay as they are (go/HANDOFF.md D13).
+const crashExitCode = 2 + 18*goos.IsAros
