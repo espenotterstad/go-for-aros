@@ -1,0 +1,9 @@
+#!/bin/sh
+# C driver for GOOS=aros (go/HANDOFF.md D8): Go's external linker runs it as $CC.
+# AROS_BIN points at an AROS build's bin/<target> directory, e.g. ~/git/AROS/bin/darwin-aarch64.
+: "${AROS_BIN:?set AROS_BIN to the bin/TARGET directory of an AROS build}"
+PATH="$AROS_BIN/tools:$AROS_BIN/tools/crosstools/bin:$PATH"
+export PATH
+exec "$AROS_BIN/tools/crosstools/bin/clang" --target=aarch64-unknown-aros \
+	-fno-pic -fno-pie -mcmodel=large -ffixed-x18 \
+	-I "$AROS_BIN/AROS/Developer/include" -L "$AROS_BIN/AROS/Developer/lib" "$@"

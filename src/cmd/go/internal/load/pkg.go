@@ -2686,7 +2686,8 @@ func LinkerDeps(s *modload.Loader, p *Package) ([]string, error) {
 	deps := []string{"runtime"}
 
 	// External linking mode forces an import of runtime/cgo.
-	if what := externalLinkingReason(s, p); what != "" && cfg.BuildContext.Compiler != "gccgo" {
+	// Not on aros: it always links externally, through AROS's C driver, without cgo (go/HANDOFF.md D3, D8).
+	if what := externalLinkingReason(s, p); what != "" && cfg.BuildContext.Compiler != "gccgo" && cfg.Goos != "aros" {
 		if !cfg.BuildContext.CgoEnabled {
 			return nil, fmt.Errorf("%s requires external (cgo) linking, but cgo is not enabled", what)
 		}

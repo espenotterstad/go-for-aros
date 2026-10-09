@@ -584,7 +584,7 @@ func (ctxt *Link) loadlib() {
 	// We now have enough information to determine the link mode.
 	determineLinkMode(ctxt)
 
-	if ctxt.LinkMode == LinkExternal && !iscgo && !(buildcfg.GOOS == "darwin" && ctxt.BuildMode != BuildModePlugin && ctxt.Arch.Family == sys.AMD64) {
+	if ctxt.LinkMode == LinkExternal && !iscgo && !ctxt.IsAros() && !(buildcfg.GOOS == "darwin" && ctxt.BuildMode != BuildModePlugin && ctxt.Arch.Family == sys.AMD64) {
 		// This indicates a user requested -linkmode=external.
 		// The startup code uses an import of runtime/cgo to decide
 		// whether to initialize the TLS.  So give it one. This could
@@ -854,7 +854,7 @@ func (ctxt *Link) linksetup() {
 	// The Android Q linker started to complain about underalignment of the our TLS
 	// section. We don't actually use the section on android, so don't
 	// generate it.
-	if buildcfg.GOOS != "android" {
+	if buildcfg.GOOS != "android" && buildcfg.GOOS != "aros" {
 		tlsg := ctxt.loader.LookupOrCreateSym("runtime.tlsg", 0)
 		sb := ctxt.loader.MakeSymbolUpdater(tlsg)
 
@@ -1437,6 +1437,10 @@ func (ctxt *Link) hostlink() {
 		return
 	}
 	if ctxt.BuildMode == BuildModeCArchive {
+		return
+	}
+	if ctxt.IsAros() {
+		ctxt.hostlinkAros()
 		return
 	}
 
