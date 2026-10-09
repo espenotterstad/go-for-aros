@@ -410,8 +410,15 @@ func NameFromLock(lock Handle) (string, error) {
 	}
 }
 
+// cwdLock keeps Chdir from unlocking the current directory while Getwd
+// names it: NameFromLock allocates before its dos call, and a goroutine
+// switch there would leave Getwd with a freed lock.
+var cwdLock sync.Mutex
+
 // Getwd returns the current directory as a Go path ("Work:dir").
 func Getwd() (string, error) {
+	cwdLock.Lock()
+	defer cwdLock.Unlock()
 	t, _ := aroscall(*(*uintptr)(unsafe.Pointer(sysBase - 8*_LVO_FindTask)), 0, sysBase, 0, 0, 0, 0)
 	return NameFromLock(*(*Handle)(unsafe.Pointer(t + _Process_pr_CurrentDir)))
 }
@@ -433,9 +440,11 @@ func Chdir(path string) error {
 		UnLock(lock)
 		return ENOTDIR
 	}
+	cwdLock.Lock()
 	old, _ := dosCall(_LVO_CurrentDir, uintptr(lock), dosBase, 0, 0, 0)
 	if old != arosShellDir() {
 		UnLock(Handle(old))
 	}
+	cwdLock.Unlock()
 	return nil
 }
