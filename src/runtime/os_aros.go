@@ -32,8 +32,9 @@ var (
 	arosTimerName                           = [...]byte{'t', 'i', 'm', 'e', 'r', '.', 'd', 'e', 'v', 'i', 'c', 'e', 0}
 	arosHeapVar                             = [...]byte{'G', 'O', 'A', 'R', 'O', 'S', 'H', 'E', 'A', 'P', 0}
 	arosOldTrap                             uintptr // the task's tc_TrapCode before main, restored by arosLeave
-	arosFaulted                             uint32  // set by arosTrap on the first fault
+	arosFaulted                             uint32  // set by arosTrap when it sends a fault to arosFault
 	arosFaultCode, arosFaultPC              uintptr
+	arosTrapDepth                           uintptr // deepest trap frame below a faulting goroutine's sp so far (D12)
 )
 
 type aroscallArgs struct {
@@ -190,10 +191,11 @@ func exitThread(wait *atomic.Uint32) { throw("aros: exitThread: one M until mile
 
 func exit(code int32) // sys_aros_arm64.s
 
-// arosFatalFault reports a fault caught by arosTrap; arosFault then exits
-// with code 2. Runs on g0's stack.
+// arosFatalFault reports a fault arosTrap couldn't turn into a panic (C code,
+// runtime code on g0, a stack split, runtime.abort); arosFault then exits
+// with crashExitCode. Runs on g0's stack.
 func arosFatalFault() {
-	print("fatal error: aros: memory fault (trap ", arosFaultCode, ") at pc=", hex(arosFaultPC), " (fault handling: milestone 2)\n")
+	print("fatal error: aros: unexpected fault (trap ", arosFaultCode, ") at pc=", hex(arosFaultPC), "\n")
 }
 
 func crash() { exit(crashExitCode) }

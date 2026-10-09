@@ -132,14 +132,78 @@ notask:
 	RET
 
 // arosTrap is the task's tc_TrapCode while Go runs (go/HANDOFF.md F1): exec
-// calls it with the C ABI, R0 = trap number, R1 = struct ExceptionContext *.
-// The first fault resumes the task in arosFault; a fault after that goes to
-// the previous trap code (AROS's requester) instead of looping. Only R9 and
-// R10 are used: no REGTMP (R27 is callee-saved in C).
+// calls it with the C ABI, R0 = trap number, R1 = struct ExceptionContext *,
+// on the faulting task's stack below the host signal frame (F3).
+//
+// A fault in Go code, on a goroutine that may panic, becomes a call to
+// sigpanic, set up as arm64's preparePanic does (signal_arm64.go): sp drops
+// by 16 with lr at [sp] and fp at [sp-8], lr = the faulting pc, x28 (g)
+// stays. Anything else resumes in arosFault, which reports it and exits; a
+// fault while arosFault runs goes to the previous trap code (AROS's
+// requester) instead of looping. Uses R0-R1 and R9-R14 only: no REGTMP (R27
+// is callee-saved in C).
 TEXT runtime·arosTrap(SB),NOSPLIT|NOFRAME,$0
 	MOVD	$runtime·arosFaulted(SB), R9
 	MOVWU	(R9), R10
 	CBNZ	R10, again
+	MOVD	const__ExceptionContext_pc(R1), R10	// R10 = faulting pc
+	// Go code: text <= pc < etext, and not runtime·abort, which faults on purpose.
+	MOVD	$runtime·text(SB), R9
+	CMP	R9, R10
+	BLO	fatal
+	MOVD	$runtime·etext(SB), R9
+	CMP	R9, R10
+	BHS	fatal
+	MOVD	$runtime·abort(SB), R9
+	SUB	R9, R10, R11
+	CMP	$16, R11
+	BLO	fatal
+	// g = x28: a goroutine in the heap (g0s are not), its m's curg, and not
+	// in a stack split (signal_unix.go sighandler's condition). Checked in
+	// that order, so nothing is read through a pointer that isn't a g.
+	MOVD	const__ExceptionContext_x28(R1), R11
+	MOVD	$runtime·arosHeapBase(SB), R9
+	MOVD	(R9), R12
+	CMP	R12, R11
+	BLO	fatal
+	MOVD	$runtime·arosHeapEnd(SB), R9
+	MOVD	(R9), R12
+	CMP	R12, R11
+	BHS	fatal
+	MOVD	g_m(R11), R12
+	CBZ	R12, fatal
+	MOVD	m_curg(R12), R12
+	CMP	R11, R12
+	BNE	fatal
+	MOVBU	g_throwsplit(R11), R12
+	CBNZ	R12, fatal
+	// sigpanic's inputs (A8: no fault address).
+	MOVW	R0, g_sig(R11)
+	MOVD	R0, g_sigcode0(R11)
+	MOVD	ZR, g_sigcode1(R11)
+	MOVD	R10, g_sigpc(R11)
+	// D12: how far below the goroutine's sp the host and exec frames reach.
+	MOVD	const__ExceptionContext_sp(R1), R12
+	MOVD	RSP, R13
+	SUB	R13, R12, R13
+	MOVD	$runtime·arosTrapDepth(SB), R9
+	MOVD	(R9), R14
+	CMP	R14, R13
+	BLS	depthok
+	MOVD	R13, (R9)
+depthok:
+	SUB	$16, R12
+	MOVD	const__ExceptionContext_lr(R1), R13
+	MOVD	R13, 0(R12)
+	MOVD	const__ExceptionContext_fp(R1), R13
+	MOVD	R13, -8(R12)
+	MOVD	R12, const__ExceptionContext_sp(R1)
+	MOVD	R10, const__ExceptionContext_lr(R1)
+	MOVD	$runtime·sigpanic0(SB), R13
+	MOVD	R13, const__ExceptionContext_pc(R1)
+	RET
+fatal:
+	MOVD	$runtime·arosFaulted(SB), R9
 	MOVW	$1, R10
 	MOVW	R10, (R9)
 	MOVD	$runtime·arosFaultCode(SB), R9
@@ -155,9 +219,9 @@ again:
 	MOVD	(R9), R9
 	B	(R9)
 
-// arosFault is where a faulting task resumes. R28 may not be g (C code may
-// have faulted), so take m0's g0 and the top of its stack, report the fault
-// and leave with crashExitCode. Go's own fault handling (sigpanic) is milestone 2.
+// arosFault is where a fault arosTrap can't hand to sigpanic resumes. R28 may
+// not be g (C code may have faulted), so take m0's g0 and the top of its
+// stack, report the fault and leave with crashExitCode.
 TEXT runtime·arosFault(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
 	MOVD	$runtime·g0(SB), g
 	MOVD	(g_stack+stack_hi)(g), R10
