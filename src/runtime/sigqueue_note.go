@@ -7,7 +7,7 @@
 // signal_recv thread. This file holds the non-Darwin implementations of
 // those functions. These functions will never be called.
 
-//go:build !darwin && !plan9
+//go:build !aros && !darwin && !plan9
 
 package runtime
 

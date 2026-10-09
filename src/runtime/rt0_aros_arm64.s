@@ -1,0 +1,75 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+#include "go_asm.h"
+#include "textflag.h"
+
+// AROS's C startup (startup.o) calls main(argc, argv) on the shell's stack
+// (40 KB, no guard page). main saves the C state, widens the task's stack
+// bounds to 0..~0 (goroutine stacks live in the heap; the scheduler suspends a
+// task whose SP leaves its bounds), gives Go a 128 KB g0 stack and enters
+// rt0_go. runtime·exit (sys_aros_arm64.s) undoes it and returns the exit code
+// to the C startup. See go/HANDOFF.md D8, D9, D11.
+
+// The linker's entry symbol; the C startup calls main directly.
+TEXT _rt0_arm64_aros(SB),NOSPLIT|NOFRAME,$0
+	B	main(SB)
+
+TEXT main(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
+	MOVD	$runtime·arosCSave(SB), R9
+	STP	(R19, R20), 0(R9)
+	STP	(R21, R22), 16(R9)
+	STP	(R23, R24), 32(R9)
+	STP	(R25, R26), 48(R9)
+	STP	(R27, g), 64(R9)		// R28 is g in Go assembly
+	STP	(R29, R30), 80(R9)
+	FSTPD	(F8, F9), 96(R9)
+	FSTPD	(F10, F11), 112(R9)
+	FSTPD	(F12, F13), 128(R9)
+	FSTPD	(F14, F15), 144(R9)
+	MOVD	RSP, R10
+	MOVD	R10, 160(R9)
+	MOVD	R0, R19			// argc
+	MOVD	R1, R20			// argv
+
+	MOVD	$SysBase(SB), R9
+	MOVD	(R9), R21		// R21 = SysBase
+	MOVD	R21, runtime·arosSysBase(SB)
+	MOVD	$DOSBase(SB), R9
+	MOVD	(R9), R10
+	MOVD	R10, runtime·arosDOSBase(SB)
+
+	// task = FindTask(NULL); save its stack bounds, then widen them.
+	MOVD	$0, R0
+	MOVD	R21, R1
+	MOVD	-(8*const__LVO_FindTask)(R21), R9
+	BL	(R9)
+	MOVD	R0, runtime·arosTask(SB)
+	MOVD	$runtime·arosCSave(SB), R9
+	MOVD	const__Task_tc_SPLower(R0), R10
+	MOVD	R10, 168(R9)
+	MOVD	const__Task_tc_SPUpper(R0), R10
+	MOVD	R10, 176(R9)
+	MOVD	ZR, const__Task_tc_SPLower(R0)
+	MOVD	$-1, R10
+	MOVD	R10, const__Task_tc_SPUpper(R0)
+
+	// g0 stack = AllocMem(arosG0StackSize, MEMF_ANY)
+	MOVD	$const_arosG0StackSize, R0
+	MOVD	$const__MEMF_ANY, R1
+	MOVD	R21, R2
+	MOVD	-(8*const__LVO_AllocMem)(R21), R9
+	BL	(R9)
+	CBZ	R0, nomem
+	MOVD	R0, runtime·arosG0Stack(SB)
+	ADD	$const_arosG0StackSize, R0, R10
+	MOVD	R10, RSP		// rt0_go takes the top 64 KB as g0's stack; C calls may use the rest
+
+	MOVD	R19, R0
+	MOVD	R20, R1
+	B	runtime·rt0_go(SB)	// never returns; runtime·exit leaves through arosLeave
+
+nomem:
+	MOVD	$20, R0			// RETURN_FAIL
+	B	runtime·arosLeave(SB)

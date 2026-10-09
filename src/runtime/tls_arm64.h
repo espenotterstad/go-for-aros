@@ -44,6 +44,13 @@
 #define MRS_TPIDR_R0 MOVD R18_PLATFORM, R0
 #endif
 
+#ifdef GOOS_aros
+// AROS has no TLS: g lives only in R28 (go/HANDOFF.md D6). Nothing may read
+// TPIDR_EL0, and runtime.tls_g must not exist (LoadSeg has no TLS relocations).
+#define TLS_none
+#define MRS_TPIDR_R0 unused_TLS_on_aros
+#endif
+
 // Define something that will break the build if
 // the GOOS is unknown.
 #ifndef MRS_TPIDR_R0

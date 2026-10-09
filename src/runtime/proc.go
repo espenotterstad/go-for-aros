@@ -6529,7 +6529,8 @@ var forcegcperiod int64 = 2 * 60 * 1e9
 // haveSysmon indicates whether there is sysmon thread support.
 //
 // No threads on wasm yet, so no sysmon.
-const haveSysmon = GOARCH != "wasm"
+// AROS: one M until threads exist (go/HANDOFF.md milestone 3).
+const haveSysmon = GOARCH != "wasm" && GOOS != "aros"
 
 // Always runs without a P, so write barriers are not allowed.
 //

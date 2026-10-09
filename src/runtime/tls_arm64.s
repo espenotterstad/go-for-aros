@@ -9,6 +9,9 @@
 #include "tls_arm64.h"
 
 TEXT runtime·load_g(SB),NOSPLIT,$0
+#ifdef TLS_none
+	RET
+#else
 #ifndef GOOS_darwin
 #ifndef GOOS_openbsd
 #ifndef GOOS_windows
@@ -28,8 +31,12 @@ TEXT runtime·load_g(SB),NOSPLIT,$0
 
 nocgo:
 	RET
+#endif
 
 TEXT runtime·save_g(SB),NOSPLIT,$0
+#ifdef TLS_none
+	RET
+#else
 #ifndef GOOS_darwin
 #ifndef GOOS_openbsd
 #ifndef GOOS_windows
@@ -49,7 +56,9 @@ TEXT runtime·save_g(SB),NOSPLIT,$0
 
 nocgo:
 	RET
+#endif
 
+#ifndef TLS_none
 #ifdef TLSG_IS_VARIABLE
 #ifdef GOOS_android
 // Use the free TLS_SLOT_APP slot #2 on Android Q.
@@ -59,4 +68,5 @@ DATA runtime·tls_g+0(SB)/8, $16
 GLOBL runtime·tls_g+0(SB), NOPTR, $8
 #else
 GLOBL runtime·tls_g+0(SB), TLSBSS, $8
+#endif
 #endif

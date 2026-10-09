@@ -210,7 +210,9 @@ const (
 	// to a 48-bit address space like every other arm64 platform.
 	//
 	// WebAssembly currently has a limit of 4GB linear memory.
-	heapAddrBits = (_64bit*(1-goarch.IsWasm)*(1-goos.IsIos*goarch.IsArm64))*48 + (1-_64bit+goarch.IsWasm)*(32-(goarch.IsMips+goarch.IsMipsle)) + 40*goos.IsIos*goarch.IsArm64
+	//
+	// AROS: one AllocMem block carved sbrk-style (go/HANDOFF.md D10); 48 bits would cost ~585 MB of summaries.
+	heapAddrBits = (_64bit*(1-goarch.IsWasm)*(1-goos.IsIos*goarch.IsArm64)*(1-goos.IsAros))*48 + (1-_64bit+goarch.IsWasm)*(32-(goarch.IsMips+goarch.IsMipsle)) + 40*goos.IsIos*goarch.IsArm64 + 40*goos.IsAros
 
 	// maxAlloc is the maximum size of an allocation. On 64-bit,
 	// it's theoretically possible to allocate 1<<heapAddrBits bytes. On
@@ -256,7 +258,9 @@ const (
 	// logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
 	// prefer using heapArenaBytes where possible (we need the
 	// constant to compute some other constants).
-	logHeapArenaBytes = (6+20)*(_64bit*(1-goos.IsWindows)*(1-goarch.IsWasm)*(1-goos.IsIos*goarch.IsArm64)) + (2+20)*(_64bit*goos.IsWindows) + (2+20)*(1-_64bit) + (9+10)*goarch.IsWasm + (2+20)*goos.IsIos*goarch.IsArm64
+	//
+	// AROS: one AllocMem block carved sbrk-style (go/HANDOFF.md D10); 48 bits would cost ~585 MB of summaries.
+	logHeapArenaBytes = (6+20)*(_64bit*(1-goos.IsWindows)*(1-goarch.IsWasm)*(1-goos.IsIos*goarch.IsArm64)*(1-goos.IsAros)) + (2+20)*(_64bit*goos.IsWindows) + (2+20)*(1-_64bit) + (9+10)*goarch.IsWasm + (2+20)*goos.IsIos*goarch.IsArm64 + (2+20)*goos.IsAros
 
 	// heapArenaBitmapWords is the size of each heap arena's bitmap in uintptrs.
 	heapArenaBitmapWords = heapArenaWords / (8 * goarch.PtrSize)
