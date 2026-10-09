@@ -21,8 +21,11 @@ TEXT _rt0_arm64(SB),NOSPLIT,$0
 // main is common startup code for most amd64 systems when using
 // external linking. The C startup code will call the symbol "main"
 // passing argc and argv in the usual C ABI registers R0 and R1.
+// aros has its own main (rt0_aros_arm64.s).
+#ifndef GOOS_aros
 TEXT main(SB),NOSPLIT,$0
 	JMP	runtime·rt0_go(SB)
+#endif
 
 // _rt0_arm64_lib is common startup code for most arm64 systems when
 // using -buildmode=c-archive or -buildmode=c-shared. The linker will
