@@ -30,12 +30,14 @@ var (
 	arosTimerOpen                           uint32
 	arosTimerBase                           uintptr
 	arosTimerName                           = [...]byte{'t', 'i', 'm', 'e', 'r', '.', 'd', 'e', 'v', 'i', 'c', 'e', 0}
-	arosHeapVar                             = [...]byte{'G', 'O', 'A', 'R', 'O', 'S', 'H', 'E', 'A', 'P', 0}
 	arosOldTrap                             uintptr // the task's tc_TrapCode before main, restored by arosLeave
 	arosFaulted                             uint32  // set by arosTrap when it sends a fault to arosFault
 	arosFaultCode, arosFaultPC              uintptr
 	arosTrapDepth                           uintptr // deepest trap frame below a faulting goroutine's sp so far (D12)
 )
+
+// cstr returns the address of s's bytes for an AROS call; s must end in "\x00".
+func cstr(s string) uintptr { return uintptr(unsafe.Pointer(unsafe.StringData(s))) }
 
 type aroscallArgs struct {
 	fn  uintptr
@@ -93,11 +95,21 @@ func arosOpenTimer() {
 	arosTimerBase = *(*uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer(&arosTimerReq[0])) + _IORequest_io_Device))
 }
 
+// arosGetVar reads AROS variable name (NUL-terminated) into buf, local
+// before global (GetVar flags 0). It returns the length, or -1 if unset.
+func arosGetVar(name uintptr, buf []byte) int {
+	n := int(int32(aroscall(arosvec(arosDOSBase, _LVO_GetVar), name,
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0, arosDOSBase, 0)))
+	if n < 0 {
+		return -1
+	}
+	return min(n, len(buf)-1)
+}
+
 // arosHeapMB reads GOAROSHEAP (megabytes); 64 if unset or not a number.
 func arosHeapMB() uintptr {
 	var buf [16]byte
-	n := int32(aroscall(arosvec(arosDOSBase, _LVO_GetVar), uintptr(unsafe.Pointer(&arosHeapVar[0])),
-		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0, arosDOSBase, 0))
+	n := arosGetVar(cstr("GOAROSHEAP\x00"), buf[:])
 	if n <= 0 {
 		return 64
 	}
@@ -142,7 +154,24 @@ func sbrk(n uintptr) unsafe.Pointer {
 	return unsafe.Pointer(bl)
 }
 
-func goenvs() { envs = make([]string, 0) } // GetVar-backed environment: milestone 2
+// arosEnvVars are the variables the runtime reads itself (go/HANDOFF.md D19);
+// package syscall reads all others live through GetVar.
+var arosEnvVars = [...]string{"GODEBUG", "GOGC", "GOMAXPROCS", "GOTRACEBACK", "GOMEMLIMIT", "GOAROSHEAP"}
+
+// goenvs fills envs with the arosEnvVars that are set. envs must not stay nil:
+// gogetenv throws before env init (go/HANDOFF.md F13c).
+func goenvs() {
+	envs = make([]string, 0, len(arosEnvVars))
+	var name [16]byte
+	var buf [1024]byte
+	for _, k := range arosEnvVars {
+		copy(name[:], k)
+		name[len(k)] = 0
+		if n := arosGetVar(uintptr(unsafe.Pointer(&name[0])), buf[:]); n >= 0 {
+			envs = append(envs, k+"="+string(buf[:n]))
+		}
+	}
+}
 
 func libpreinit() {}
 
