@@ -2948,7 +2948,7 @@ func newm1(mp *m) {
 //
 // The calling thread must itself be in a known-good state.
 func startTemplateThread() {
-	if GOARCH == "wasm" { // no threads on wasm yet
+	if GOARCH == "wasm" || GOOS == "aros" { // no threads on wasm yet (aros: one M until milestone 3)
 		return
 	}
 
@@ -4553,7 +4553,7 @@ func gdestroy(gp *g) {
 
 	dropg()
 
-	if GOARCH == "wasm" { // no threads yet on wasm
+	if GOARCH == "wasm" || GOOS == "aros" { // no threads yet on wasm (aros: one M until milestone 3)
 		gfput(pp, gp)
 		return
 	}
@@ -5647,8 +5647,8 @@ func Breakpoint() {
 //
 //go:nosplit
 func dolockOSThread() {
-	if GOARCH == "wasm" {
-		return // no threads on wasm yet
+	if GOARCH == "wasm" || GOOS == "aros" {
+		return // no threads on wasm yet (aros: one M until milestone 3)
 	}
 	gp := getg()
 	gp.m.lockedg.set(gp)
@@ -5699,8 +5699,8 @@ func lockOSThread() {
 //
 //go:nosplit
 func dounlockOSThread() {
-	if GOARCH == "wasm" {
-		return // no threads on wasm yet
+	if GOARCH == "wasm" || GOOS == "aros" {
+		return // no threads on wasm yet (aros: one M until milestone 3)
 	}
 	gp := getg()
 	if gp.m.lockedInt != 0 || gp.m.lockedExt != 0 {

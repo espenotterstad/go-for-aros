@@ -68,8 +68,8 @@ import (
 //
 // [default]: https://go.dev/doc/godebug#default
 func GOMAXPROCS(n int) int {
-	if GOARCH == "wasm" && n > 1 {
-		n = 1 // WebAssembly has no threads yet, so only one CPU is possible.
+	if (GOARCH == "wasm" || GOOS == "aros") && n > 1 {
+		n = 1 // WebAssembly has no threads yet, so only one CPU is possible (aros: one M until milestone 3).
 	}
 
 	lock(&sched.lock)
