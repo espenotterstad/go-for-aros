@@ -20,6 +20,14 @@ import (
 
 const arosG0StackSize = 128 << 10 // go/HANDOFF.md D11
 
+// GOAROSHEAP bounds in megabytes (go/HANDOFF.md D10). A hello needs 12 MB
+// (measured 2026-10-09); the block must end below 1<<heapAddrBits.
+const (
+	arosHeapDefaultMB = 64
+	arosHeapMinMB     = 16
+	arosHeapMaxMB     = 1 << (heapAddrBits - 20)
+)
+
 var (
 	arosSysBase, arosDOSBase                uintptr
 	arosTask                                uintptr    // the main task (process)
@@ -111,22 +119,32 @@ func arosGetVar(name uintptr, buf []byte) int {
 	return min(n, len(buf)-1)
 }
 
-// arosHeapMB reads GOAROSHEAP (megabytes); 64 if unset or not a number.
+// arosHeapMB reads GOAROSHEAP (megabytes): the default if unset or empty, and
+// a message when it isn't a number or lies outside arosHeapMinMB..arosHeapMaxMB.
 func arosHeapMB() uintptr {
 	var buf [16]byte
 	n := arosGetVar(cstr("GOAROSHEAP\x00"), buf[:])
 	if n <= 0 {
-		return 64
+		return arosHeapDefaultMB
 	}
+	s := unsafe.String(&buf[0], n)
 	mb := uintptr(0)
 	for _, c := range buf[:n] {
 		if c < '0' || c > '9' {
-			return 64
+			print("runtime: GOAROSHEAP=", s, " is not a number of megabytes; using ", arosHeapDefaultMB, "\n")
+			return arosHeapDefaultMB
 		}
-		mb = mb*10 + uintptr(c-'0')
+		if mb <= arosHeapMaxMB {
+			mb = mb*10 + uintptr(c-'0')
+		}
 	}
-	if mb == 0 {
-		return 64
+	if mb < arosHeapMinMB {
+		print("runtime: GOAROSHEAP=", s, " is below ", arosHeapMinMB, " MB; using ", arosHeapMinMB, "\n")
+		return arosHeapMinMB
+	}
+	if mb > arosHeapMaxMB {
+		print("runtime: GOAROSHEAP=", s, " is above ", arosHeapMaxMB, " MB; using ", arosHeapMaxMB, "\n")
+		return arosHeapMaxMB
 	}
 	return mb
 }
@@ -137,10 +155,11 @@ func arosAllocHeap() {
 	if p == 0 {
 		throw("aros: cannot allocate the heap (set GOAROSHEAP to fewer megabytes)")
 	}
+	// Set before the range check, so arosLeave frees the block if it throws.
+	arosHeapBase, arosHeapSize, arosHeapEnd = p, size, p+size
 	if p+size > 1<<heapAddrBits {
 		throw("aros: heap block above the 40-bit heap address range")
 	}
-	arosHeapBase, arosHeapSize, arosHeapEnd = p, size, p+size
 	bloc = alignUp(p, physPageSize)
 	blocMax = bloc
 }

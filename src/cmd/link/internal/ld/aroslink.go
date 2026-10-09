@@ -24,7 +24,12 @@ func (ctxt *Link) hostlinkAros() {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		Exitf("running %s failed: %v\n%s\n%s", argv[0], err, cmd, out)
+		hint := ""
+		if filepath.Base(argv[0]) != "aros-cc" {
+			// Without CC, cmd/go hands the host's C compiler an AArch64 ELF object.
+			hint = "\nGOOS=aros links with AROS's C driver: set CC=$GOROOT/misc/aros/aros-cc and AROS_BIN to an AROS build's bin/<target> directory"
+		}
+		Exitf("running %s failed: %v\n%s\n%s%s", argv[0], err, cmd, out, hint)
 	}
 	if len(out) > 0 {
 		ctxt.Logf("%s", out)
