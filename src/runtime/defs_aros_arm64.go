@@ -30,6 +30,8 @@ const (
 	_IORequest_io_Device = 48
 	_Task_tc_SPLower     = 104
 	_Task_tc_SPUpper     = 112
+	_Task_tc_TrapCode    = 88
+	_ExceptionContext_pc = 256
 	_Process_pr_CES      = 488
 	_TICKS_PER_SECOND    = 50
 )

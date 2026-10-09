@@ -31,6 +31,9 @@ var (
 	arosTimerBase                           uintptr
 	arosTimerName                           = [...]byte{'t', 'i', 'm', 'e', 'r', '.', 'd', 'e', 'v', 'i', 'c', 'e', 0}
 	arosHeapVar                             = [...]byte{'G', 'O', 'A', 'R', 'O', 'S', 'H', 'E', 'A', 'P', 0}
+	arosOldTrap                             uintptr // the task's tc_TrapCode before main, restored by arosLeave
+	arosFaulted                             uint32  // set by arosTrap on the first fault
+	arosFaultCode, arosFaultPC              uintptr
 )
 
 type aroscallArgs struct {
@@ -162,6 +165,12 @@ func newosproc0(stacksize uintptr, fn unsafe.Pointer) {
 func exitThread(wait *atomic.Uint32) { throw("aros: exitThread: one M until milestone 3") }
 
 func exit(code int32) // sys_aros_arm64.s
+
+// arosFatalFault reports a fault caught by arosTrap; arosFault then exits
+// with code 2. Runs on g0's stack.
+func arosFatalFault() {
+	print("fatal error: aros: memory fault (trap ", arosFaultCode, ") at pc=", hex(arosFaultPC), " (fault handling: milestone 2)\n")
+}
 
 func crash() { exit(2) }
 

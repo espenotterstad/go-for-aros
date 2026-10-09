@@ -9,7 +9,8 @@
 // (40 KB, no guard page). main saves the C state, widens the task's stack
 // bounds to 0..~0 (goroutine stacks live in the heap; the scheduler suspends a
 // task whose SP leaves its bounds), gives Go a 128 KB g0 stack and enters
-// rt0_go. runtime·exit (sys_aros_arm64.s) undoes it and returns the exit code
+// rt0_go. It also points the task's trap code at arosTrap. runtime·exit
+// (sys_aros_arm64.s) undoes it all and returns the exit code
 // to the C startup. See go/HANDOFF.md D8, D9, D11.
 
 // The linker's entry symbol; the C startup calls main directly.
@@ -54,6 +55,13 @@ TEXT main(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
 	MOVD	ZR, const__Task_tc_SPLower(R0)
 	MOVD	$-1, R10
 	MOVD	R10, const__Task_tc_SPUpper(R0)
+
+	// Faults go to arosTrap (sys_aros_arm64.s) until arosLeave restores the
+	// task's trap code.
+	MOVD	const__Task_tc_TrapCode(R0), R10
+	MOVD	R10, runtime·arosOldTrap(SB)
+	MOVD	$runtime·arosTrap(SB), R10
+	MOVD	R10, const__Task_tc_TrapCode(R0)
 
 	// g0 stack = AllocMem(arosG0StackSize, MEMF_ANY)
 	MOVD	$const_arosG0StackSize, R0

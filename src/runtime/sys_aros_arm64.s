@@ -28,7 +28,7 @@ TEXT runtime·exit(SB),NOSPLIT|NOFRAME,$0-4
 
 // arosLeave returns R0 (the exit code) to the C startup: back on the shell's
 // stack it closes timer.device, frees the heap and the g0 stack, restores the
-// task's stack bounds and the C registers saved by main.
+// task's stack bounds and trap code and the C registers saved by main.
 TEXT runtime·arosLeave(SB),NOSPLIT|NOFRAME,$0
 	MOVW	R0, R19
 	MOVD	$runtime·arosCSave(SB), R20
@@ -63,6 +63,8 @@ nog0:
 	MOVD	R10, const__Task_tc_SPLower(R0)
 	MOVD	176(R20), R10
 	MOVD	R10, const__Task_tc_SPUpper(R0)
+	MOVD	runtime·arosOldTrap(SB), R10
+	MOVD	R10, const__Task_tc_TrapCode(R0)
 notask:
 	MOVW	R19, R0
 	MOVD	R20, R9
@@ -77,3 +79,40 @@ notask:
 	FLDPD	128(R9), (F12, F13)
 	FLDPD	144(R9), (F14, F15)
 	RET
+
+// arosTrap is the task's tc_TrapCode while Go runs (go/HANDOFF.md F1): exec
+// calls it with the C ABI, R0 = trap number, R1 = struct ExceptionContext *.
+// The first fault resumes the task in arosFault; a fault after that goes to
+// the previous trap code (AROS's requester) instead of looping. Only R9 and
+// R10 are used: no REGTMP (R27 is callee-saved in C).
+TEXT runtime·arosTrap(SB),NOSPLIT|NOFRAME,$0
+	MOVD	$runtime·arosFaulted(SB), R9
+	MOVWU	(R9), R10
+	CBNZ	R10, again
+	MOVW	$1, R10
+	MOVW	R10, (R9)
+	MOVD	$runtime·arosFaultCode(SB), R9
+	MOVD	R0, (R9)
+	MOVD	const__ExceptionContext_pc(R1), R10
+	MOVD	$runtime·arosFaultPC(SB), R9
+	MOVD	R10, (R9)
+	MOVD	$runtime·arosFault(SB), R10
+	MOVD	R10, const__ExceptionContext_pc(R1)
+	RET
+again:
+	MOVD	$runtime·arosOldTrap(SB), R9
+	MOVD	(R9), R9
+	B	(R9)
+
+// arosFault is where a faulting task resumes. R28 may not be g (C code may
+// have faulted), so take m0's g0 and the top of its stack, report the fault
+// and leave with exit code 2. Go's own fault handling (sigpanic) is milestone 2.
+TEXT runtime·arosFault(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
+	MOVD	$runtime·g0(SB), g
+	MOVD	(g_stack+stack_hi)(g), R10
+	MOVD	R10, RSP
+	MOVD	ZR, R29
+	MOVD	ZR, R30
+	BL	runtime·arosFatalFault(SB)
+	MOVW	$2, R0
+	B	runtime·arosLeave(SB)
