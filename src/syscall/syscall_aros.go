@@ -395,3 +395,47 @@ func SetFileDate(path string, ds *DateStamp) error {
 	}
 	return nil
 }
+
+// NameFromLock returns lock's full name as a Go path (goPath).
+func NameFromLock(lock Handle) (string, error) {
+	for n := 256; ; n *= 2 {
+		buf := make([]byte, n)
+		r, e := dosCall(_LVO_NameFromLock, uintptr(lock), uintptr(unsafe.Pointer(&buf[0])), uintptr(n), dosBase, 0)
+		if int16(r) != 0 {
+			return goPath(cstring(buf))
+		}
+		if e != ERROR_LINE_TOO_LONG || n >= 1<<16 {
+			return "", e
+		}
+	}
+}
+
+// Getwd returns the current directory as a Go path ("Work:dir").
+func Getwd() (string, error) {
+	t, _ := aroscall(*(*uintptr)(unsafe.Pointer(sysBase - 8*_LVO_FindTask)), 0, sysBase, 0, 0, 0, 0)
+	return NameFromLock(*(*Handle)(unsafe.Pointer(t + _Process_pr_CurrentDir)))
+}
+
+// Chdir makes path the current directory. The lock it replaces is unlocked
+// unless it is the shell's, which the runtime gives back at exit (along
+// with unlocking Go's last one; go/HANDOFF.md D18).
+func Chdir(path string) error {
+	lock, err := Lock(path, LockShared)
+	if err != nil {
+		return err
+	}
+	var fib FileInfoBlock
+	if err := Examine(lock, &fib); err != nil {
+		UnLock(lock)
+		return err
+	}
+	if fib.DirEntryType < 0 {
+		UnLock(lock)
+		return ENOTDIR
+	}
+	old, _ := dosCall(_LVO_CurrentDir, uintptr(lock), dosBase, 0, 0, 0)
+	if old != arosShellDir() {
+		UnLock(Handle(old))
+	}
+	return nil
+}
