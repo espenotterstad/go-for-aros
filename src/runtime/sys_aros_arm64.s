@@ -28,8 +28,9 @@ TEXT runtime·exit(SB),NOSPLIT|NOFRAME,$0-4
 
 // arosLeave returns R0 (the exit code) to the C startup: back on the shell's
 // stack it gives back m0's timer port, request and semaphore signal, closes
-// timer.device, frees the heap and the g0 stack, restores the task's stack
-// bounds and trap code and the C registers saved by main.
+// timer.device, frees the heap and the g0 stack, restores what main changed
+// in the task (stack bounds, trap code, TF_STACKCHK, pr_WindowPtr,
+// pr_CurrentDir) and the C registers saved by main.
 TEXT runtime·arosLeave(SB),NOSPLIT|NOFRAME,$0
 	MOVW	R0, R19
 	MOVD	$runtime·arosCSave(SB), R20
@@ -108,14 +109,36 @@ noheap:
 	MOVD	-(8*const__LVO_FreeMem)(R21), R9
 	BL	(R9)
 nog0:
-	MOVD	runtime·arosTask(SB), R0
-	CBZ	R0, notask
+	MOVD	runtime·arosTask(SB), R22
+	CBZ	R22, notask
 	MOVD	168(R20), R10
-	MOVD	R10, const__Task_tc_SPLower(R0)
+	MOVD	R10, const__Task_tc_SPLower(R22)
 	MOVD	176(R20), R10
-	MOVD	R10, const__Task_tc_SPUpper(R0)
+	MOVD	R10, const__Task_tc_SPUpper(R22)
 	MOVD	runtime·arosOldTrap(SB), R10
-	MOVD	R10, const__Task_tc_TrapCode(R0)
+	MOVD	R10, const__Task_tc_TrapCode(R22)
+	// TF_STACKCHK as main found it (D9).
+	MOVBU	const__Task_tc_Flags(R22), R10
+	MOVD	$const__TF_STACKCHK, R11
+	BIC	R11, R10
+	MOVBU	runtime·arosShellTaskFlags(SB), R12
+	AND	R11, R12
+	ORR	R12, R10
+	MOVB	R10, const__Task_tc_Flags(R22)
+	// The shell's requester setting and current directory (D18). Any other
+	// current directory is a lock Go took (syscall.Chdir): unlock it.
+	MOVD	runtime·arosShellWindowPtr(SB), R10
+	MOVD	R10, const__Process_pr_WindowPtr(R22)
+	MOVD	runtime·arosShellDir(SB), R0
+	MOVD	const__Process_pr_CurrentDir(R22), R10
+	CMP	R0, R10
+	BEQ	notask
+	MOVD	runtime·arosDOSBase(SB), R1
+	MOVD	-(8*const__LVO_CurrentDir)(R1), R9
+	BL	(R9)			// R0 = Go's lock
+	MOVD	runtime·arosDOSBase(SB), R1
+	MOVD	-(8*const__LVO_UnLock)(R1), R9
+	BL	(R9)
 notask:
 	MOVW	R19, R0
 	MOVD	R20, R9

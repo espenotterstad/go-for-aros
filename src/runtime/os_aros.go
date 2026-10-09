@@ -35,6 +35,9 @@ var (
 	arosFaultCode, arosFaultPC              uintptr
 	arosTrapDepth                           uintptr // deepest trap frame below a faulting goroutine's sp so far (D12)
 	arosUTCOffset                           int64   // UTC minus AROS's clock in seconds, set by osinit (D21)
+	arosShellDir                            uintptr // the shell's pr_CurrentDir, saved by main, restored by arosLeave (D18)
+	arosShellWindowPtr                      uintptr // the shell's pr_WindowPtr; Go runs with -1, no requesters (D18)
+	arosShellTaskFlags                      uint8   // tc_Flags before main cleared TF_STACKCHK (D9)
 )
 
 // cstr returns the address of s's bytes for an AROS call; s must end in "\x00".

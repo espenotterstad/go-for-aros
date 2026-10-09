@@ -63,6 +63,21 @@ TEXT main(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
 	MOVD	$runtime·arosTrap(SB), R10
 	MOVD	R10, const__Task_tc_TrapCode(R0)
 
+	// Shell state Go borrows (D18): pr_WindowPtr -1 keeps "insert volume"
+	// requesters away; the current directory is saved for arosLeave. And
+	// TF_STACKCHK off, since the bounds are 0..~0 (D9).
+	MOVD	const__Process_pr_CurrentDir(R0), R10
+	MOVD	R10, runtime·arosShellDir(SB)
+	MOVD	const__Process_pr_WindowPtr(R0), R10
+	MOVD	R10, runtime·arosShellWindowPtr(SB)
+	MOVD	$-1, R10
+	MOVD	R10, const__Process_pr_WindowPtr(R0)
+	MOVBU	const__Task_tc_Flags(R0), R10
+	MOVB	R10, runtime·arosShellTaskFlags(SB)
+	MOVD	$const__TF_STACKCHK, R11
+	BIC	R11, R10
+	MOVB	R10, const__Task_tc_Flags(R0)
+
 	// g0 stack = AllocMem(arosG0StackSize, MEMF_ANY)
 	MOVD	$const_arosG0StackSize, R0
 	MOVD	$const__MEMF_ANY, R1
@@ -79,5 +94,26 @@ TEXT main(SB),NOSPLIT|NOFRAME|TOPFRAME,$0
 	B	runtime·rt0_go(SB)	// never returns; runtime·exit leaves through arosLeave
 
 nomem:
+	// No g0 stack: say so on the error stream (pr_CES, else Output()).
+	MOVD	runtime·arosTask(SB), R9
+	MOVD	const__Process_pr_CES(R9), R0
+	CBNZ	R0, nomemfh
+	MOVD	runtime·arosDOSBase(SB), R0
+	MOVD	-(8*const__LVO_Output)(R0), R9
+	BL	(R9)
+nomemfh:
+	MOVD	$nomemmsg<>(SB), R1
+	MOVD	$44, R2
+	MOVD	runtime·arosDOSBase(SB), R3
+	MOVD	-(8*const__LVO_Write)(R3), R9
+	BL	(R9)
 	MOVD	$20, R0			// RETURN_FAIL
 	B	runtime·arosLeave(SB)
+
+DATA	nomemmsg<>+0(SB)/8, $"runtime:"
+DATA	nomemmsg<>+8(SB)/8, $" aros: c"
+DATA	nomemmsg<>+16(SB)/8, $"annot al"
+DATA	nomemmsg<>+24(SB)/8, $"locate t"
+DATA	nomemmsg<>+32(SB)/8, $"he g0 st"
+DATA	nomemmsg<>+40(SB)/4, $"ack\n"
+GLOBL	nomemmsg<>(SB), RODATA, $44
