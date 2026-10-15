@@ -108,9 +108,12 @@ const (
 
 // dos has no append mode: Write seeks to the end first on a handle opened
 // with O_APPEND (not atomic with the write).
+// pendingProt holds the protection of a file created without owner write
+// until Close (Open). Both maps are guarded by appendLock.
 var (
-	appendLock sync.Mutex
-	appendFDs  map[Handle]bool
+	appendLock  sync.Mutex
+	appendFDs   map[Handle]bool
+	pendingProt map[Handle]uint32
 )
 
 func isAppend(fd Handle) bool {
@@ -149,7 +152,17 @@ func Open(path string, mode int, perm uint32) (fd Handle, err error) {
 		return 0, e
 	}
 	fd = Handle(r)
-	if create {
+	if create && perm&0200 == 0 {
+		// ram-handler checks FIBF_WRITE at every Write: a file created
+		// without owner write gets its protection at Close, so the handle
+		// that created it can write, as on Unix.
+		appendLock.Lock()
+		if pendingProt == nil {
+			pendingProt = make(map[Handle]uint32)
+		}
+		pendingProt[fd] = permProt(perm)
+		appendLock.Unlock()
+	} else if create {
 		dosCall(_LVO_SetProtection, uintptr(unsafe.Pointer(p)), uintptr(permProt(perm)), dosBase, 0, 0)
 	}
 	if mode&O_TRUNC != 0 {
@@ -173,9 +186,18 @@ func Open(path string, mode int, perm uint32) (fd Handle, err error) {
 func Close(fd Handle) error {
 	appendLock.Lock()
 	delete(appendFDs, fd)
+	prot, pending := pendingProt[fd]
+	delete(pendingProt, fd)
 	appendLock.Unlock()
+	var name string
+	if pending {
+		name, _ = NameFromFH(fd)
+	}
 	if r, e := dosCall(_LVO_Close, uintptr(fd), dosBase, 0, 0, 0); int16(r) == 0 {
 		return e
+	}
+	if name != "" {
+		return SetProtection(name, prot)
 	}
 	return nil
 }
