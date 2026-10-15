@@ -12,8 +12,13 @@ import (
 
 // readdir reads the directory with Examine and ExNext on the lock the
 // File holds. Entries named "." or ".." (ram-handler accepts such names)
-// are skipped, as on Unix.
+// are skipped, as on Unix. The read lock keeps Close from unlocking the
+// lock while it is read.
 func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []DirEntry, infos []FileInfo, err error) {
+	if err := file.readLock(); err != nil {
+		return nil, nil, nil, &PathError{Op: "readdir", Path: file.name, Err: err}
+	}
+	defer file.readUnlock()
 	if !file.isDir {
 		return nil, nil, nil, &PathError{Op: "readdir", Path: file.name, Err: syscall.ENOTDIR}
 	}
