@@ -146,7 +146,7 @@ func MustHaveGoRun(t testing.TB) {
 // There is a copy of this function in cmd/dist/test.go.
 func HasParallelism() bool {
 	switch runtime.GOOS {
-	case "js", "wasip1":
+	case "js", "wasip1", "aros":
 		return false
 	}
 	return true
@@ -424,7 +424,7 @@ func HasLink() bool {
 	// From Android release M (Marshmallow), hard linking files is blocked
 	// and an attempt to call link() on a file will return EACCES.
 	// - https://code.google.com/p/android-developer-preview/issues/detail?id=3150
-	return runtime.GOOS != "plan9" && runtime.GOOS != "android"
+	return runtime.GOOS != "plan9" && runtime.GOOS != "android" && runtime.GOOS != "aros"
 }
 
 // MustHaveLink reports whether the current system can use os.Link.
