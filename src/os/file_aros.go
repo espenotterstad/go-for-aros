@@ -95,8 +95,39 @@ func hasTrailingSlash(name string) bool {
 	return n > 1 && name[n-1] == '/' && name[n-2] != ':'
 }
 
+// checkTrailingSlash refuses a name with a trailing slash that names no
+// directory, before a dos call acts on the file dos would find without
+// the slash: ENOTDIR for a file, the Lock error for a missing name, or
+// EISDIR if it would be created (as Linux). nil for a directory and for a
+// name without a trailing slash.
+func checkTrailingSlash(name string, create bool) error {
+	if !hasTrailingSlash(name) {
+		return nil
+	}
+	lock, e := syscall.Lock(name, syscall.LockShared)
+	if e != nil {
+		if create && e == syscall.ERROR_OBJECT_NOT_FOUND {
+			return syscall.EISDIR
+		}
+		return e
+	}
+	var fib syscall.FileInfoBlock
+	e = syscall.Examine(lock, &fib)
+	syscall.UnLock(lock)
+	if e != nil {
+		return e
+	}
+	if fib.DirEntryType <= 0 {
+		return syscall.ENOTDIR
+	}
+	return nil
+}
+
 // openFileNolog is the AROS implementation of OpenFile.
 func openFileNolog(name string, flag int, perm FileMode) (*File, error) {
+	if e := checkTrailingSlash(name, flag&O_CREATE != 0); e != nil {
+		return nil, &PathError{Op: "open", Path: name, Err: e}
+	}
 	fd, e := syscall.Open(name, flag, syscallMode(perm))
 	if e == syscall.ERROR_OBJECT_WRONG_TYPE {
 		// dos opens no directory (go/HANDOFF.md F24a): lock it, for
@@ -108,10 +139,6 @@ func openFileNolog(name string, flag int, perm FileMode) (*File, error) {
 	}
 	if e != nil {
 		return nil, &PathError{Op: "open", Path: name, Err: e}
-	}
-	if hasTrailingSlash(name) {
-		syscall.Close(fd)
-		return nil, &PathError{Op: "open", Path: name, Err: syscall.ENOTDIR}
 	}
 	f := newFileFromNewFile(uintptr(fd), name)
 	f.appendMode = flag&O_APPEND != 0
@@ -387,7 +414,11 @@ func (f *File) seek(offset int64, whence int) (ret int64, err error) {
 // If the file is a symbolic link, it changes the size of the link's target.
 // If there is an error, it will be of type [*PathError].
 func Truncate(name string, size int64) error {
-	fd, err := syscall.Open(name, O_RDWR, 0)
+	err := checkTrailingSlash(name, false)
+	var fd syscall.Handle
+	if err == nil {
+		fd, err = syscall.Open(name, O_RDWR, 0)
+	}
 	if err == syscall.ERROR_OBJECT_WRONG_TYPE {
 		err = syscall.EISDIR
 	}
@@ -404,7 +435,11 @@ func Truncate(name string, size int64) error {
 // Remove removes the named file or directory.
 // If there is an error, it will be of type [*PathError].
 func Remove(name string) error {
-	if e := syscall.Remove(name); e != nil {
+	e := checkTrailingSlash(name, false)
+	if e == nil {
+		e = syscall.Remove(name)
+	}
+	if e != nil {
 		return &PathError{Op: "remove", Path: name, Err: e}
 	}
 	return nil
