@@ -63,14 +63,19 @@ var (
 	Stderr = stderrHandle()
 )
 
+// findTask returns the calling task (exec FindTask(NULL)): a Process.
+func findTask() uintptr {
+	t, _ := aroscall(*(*uintptr)(unsafe.Pointer(sysBase - 8*_LVO_FindTask)), 0, sysBase, 0, 0, 0, 0)
+	return t
+}
+
 func stdHandle(lvo uintptr) Handle {
 	r, _ := dosCall(lvo, dosBase, 0, 0, 0, 0)
 	return Handle(r)
 }
 
 func stderrHandle() Handle {
-	t, _ := aroscall(*(*uintptr)(unsafe.Pointer(sysBase - 8*_LVO_FindTask)), 0, sysBase, 0, 0, 0, 0)
-	if h := *(*Handle)(unsafe.Pointer(t + _Process_pr_CES)); h != 0 {
+	if h := *(*Handle)(unsafe.Pointer(findTask() + _Process_pr_CES)); h != 0 {
 		return h
 	}
 	return Stdout
@@ -114,23 +119,28 @@ func isAppend(fd Handle) bool {
 	return appendFDs[fd]
 }
 
-// Open opens path. perm is ignored: dos gives a new file its default
-// protection. O_CREAT|O_EXCL checks with Lock first (not atomic). Every
-// create is MODE_READWRITE (open or create, a shared lock), O_TRUNC a
-// SetFileSize after it: MODE_NEWFILE would lock the file exclusively while
-// it is open and, on ram-handler, delete and recreate an existing one.
+// Open opens path. O_CREAT checks with Lock first whether the file exists
+// (not atomic): O_EXCL fails if it does, and a file Open creates gets perm
+// (permProt; no umask). Every create is MODE_READWRITE (open or create, a
+// shared lock), O_TRUNC a SetFileSize after it: MODE_NEWFILE would lock the
+// file exclusively while it is open and, on ram-handler, delete and
+// recreate an existing one. A handler without SetFileSize (NIL:) ignores
+// O_TRUNC.
 func Open(path string, mode int, perm uint32) (fd Handle, err error) {
 	p, err := dosPath(path)
 	if err != nil {
 		return 0, err
 	}
 	dmode := uintptr(_MODE_OLDFILE) // existing file, read and write
+	create := false
 	if mode&O_CREAT != 0 {
-		if mode&O_EXCL != 0 {
-			if l, _ := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(p)), iptr(_SHARED_LOCK), dosBase, 0, 0); l != 0 {
-				dosCall(_LVO_UnLock, l, dosBase, 0, 0, 0)
+		if l, _ := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(p)), iptr(_SHARED_LOCK), dosBase, 0, 0); l != 0 {
+			dosCall(_LVO_UnLock, l, dosBase, 0, 0, 0)
+			if mode&O_EXCL != 0 {
 				return 0, EEXIST
 			}
+		} else {
+			create = true
 		}
 		dmode = _MODE_READWRITE
 	}
@@ -139,8 +149,12 @@ func Open(path string, mode int, perm uint32) (fd Handle, err error) {
 		return 0, e
 	}
 	fd = Handle(r)
+	if create {
+		dosCall(_LVO_SetProtection, uintptr(unsafe.Pointer(p)), uintptr(permProt(perm)), dosBase, 0, 0)
+	}
 	if mode&O_TRUNC != 0 {
-		if r, e := dosCall(_LVO_SetFileSize, uintptr(fd), 0, iptr(_OFFSET_BEGINNING), dosBase, 0); int32(r) < 0 {
+		r, e := dosCall(_LVO_SetFileSize, uintptr(fd), 0, iptr(_OFFSET_BEGINNING), dosBase, 0)
+		if int32(r) < 0 && e != ERROR_ACTION_NOT_KNOWN && e != ERROR_NOT_IMPLEMENTED {
 			Close(fd)
 			return 0, e
 		}
@@ -168,6 +182,9 @@ func Close(fd Handle) error {
 
 // Read reads at most 2 GB at a time (dos lengths are LONG).
 func Read(fd Handle, p []byte) (n int, err error) {
+	if fd == 0 {
+		return 0, EINVAL // dos dereferences a BNULL handle (go/HANDOFF.md F21l)
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -179,6 +196,9 @@ func Read(fd Handle, p []byte) (n int, err error) {
 }
 
 func Write(fd Handle, p []byte) (n int, err error) {
+	if fd == 0 {
+		return 0, EINVAL
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -209,7 +229,7 @@ func Seek(fd Handle, offset int64, whence int) (newoffset int64, err error) {
 	default:
 		return 0, EINVAL
 	}
-	if offset != int64(int32(offset)) {
+	if fd == 0 || offset != int64(int32(offset)) {
 		return 0, EINVAL
 	}
 	if r, e := dosCall(_LVO_Seek, uintptr(fd), uintptr(offset), iptr(mode), dosBase, 0); int32(r) < 0 {
@@ -221,6 +241,19 @@ func Seek(fd Handle, offset int64, whence int) (newoffset int64, err error) {
 		return 0, e
 	}
 	return int64(int32(r)), nil
+}
+
+// Ftruncate sets fd's size to length. The position stays, except that
+// ram-handler moves a position past the new end back to it (go/HANDOFF.md
+// F24).
+func Ftruncate(fd Handle, length int64) error {
+	if fd == 0 || length < 0 || length != int64(int32(length)) {
+		return EINVAL
+	}
+	if r, e := dosCall(_LVO_SetFileSize, uintptr(fd), uintptr(length), iptr(_OFFSET_BEGINNING), dosBase, 0); int32(r) < 0 {
+		return e
+	}
+	return nil
 }
 
 // Lock locks path (mode SHARED_LOCK or EXCLUSIVE_LOCK, as LockShared and
@@ -244,6 +277,15 @@ const (
 
 func UnLock(lock Handle) {
 	dosCall(_LVO_UnLock, uintptr(lock), dosBase, 0, 0, 0)
+}
+
+// DupLock returns a second shared lock on what lock locks.
+func DupLock(lock Handle) (Handle, error) {
+	r, e := dosCall(_LVO_DupLock, uintptr(lock), dosBase, 0, 0, 0)
+	if r == 0 {
+		return 0, e
+	}
+	return Handle(r), nil
 }
 
 // A DateStamp is dos's time: days since 1978-01-01, minutes since
@@ -322,13 +364,16 @@ func ExNext(lock Handle, fib *FileInfoBlock) error {
 
 // ExamineFH fills fib for an open file.
 func ExamineFH(fd Handle, fib *FileInfoBlock) error {
+	if fd == 0 {
+		return EINVAL
+	}
 	if r, e := dosCall(_LVO_ExamineFH, uintptr(fd), uintptr(unsafe.Pointer(fib)), dosBase, 0, 0); int16(r) == 0 {
 		return e
 	}
 	return nil
 }
 
-// Mkdir creates directory path. perm is ignored, as in Open.
+// Mkdir creates directory path with perm (permProt), as Open does.
 func Mkdir(path string, perm uint32) error {
 	p, err := dosPath(path)
 	if err != nil {
@@ -339,12 +384,27 @@ func Mkdir(path string, perm uint32) error {
 		return e
 	}
 	UnLock(Handle(r)) // CreateDir returns an exclusive lock on the new directory
+	dosCall(_LVO_SetProtection, uintptr(unsafe.Pointer(p)), uintptr(permProt(perm)), dosBase, 0, 0)
 	return nil
+}
+
+// dosObject is dosPath for a call that changes the object itself: the
+// current directory, which arosPath gives as "", is EINVAL, as Unix
+// refuses rmdir(".") and rename(".", x) (go/HANDOFF.md F22e).
+func dosObject(path string) (*byte, error) {
+	p, err := arosPath(path)
+	if err != nil {
+		return nil, err
+	}
+	if p == "" {
+		return nil, EINVAL
+	}
+	return BytePtrFromString(p)
 }
 
 // Remove deletes a file or an empty directory (dos DeleteFile does both).
 func Remove(path string) error {
-	p, err := dosPath(path)
+	p, err := dosObject(path)
 	if err != nil {
 		return err
 	}
@@ -357,11 +417,11 @@ func Remove(path string) error {
 // Rename renames from to to. dos never overwrites an existing to
 // (ERROR_OBJECT_EXISTS); package os deletes it first (go/HANDOFF.md F18b).
 func Rename(from, to string) error {
-	p, err := dosPath(from)
+	p, err := dosObject(from)
 	if err != nil {
 		return err
 	}
-	q, err := dosPath(to)
+	q, err := dosObject(to)
 	if err != nil {
 		return err
 	}
@@ -384,6 +444,79 @@ func SetProtection(path string, mask uint32) error {
 	return nil
 }
 
+// Unix permission bits and dos protection bits. The owner's RWE bits are
+// active-low, the group's and others' active-high; D (delete) stays
+// allowed, as Unix decides deletion by the directory. Reading follows
+// posixc (__prot_a2u): S (script) makes a file executable for everyone.
+const permProtMask = FIBF_READ | FIBF_WRITE | FIBF_EXECUTE | FIBF_GRP_READ | FIBF_GRP_WRITE | FIBF_GRP_EXECUTE |
+	FIBF_OTR_READ | FIBF_OTR_WRITE | FIBF_OTR_EXECUTE
+
+// permProt returns the protection bits for Unix permission bits perm.
+func permProt(perm uint32) uint32 {
+	var prot uint32
+	if perm&0400 == 0 {
+		prot |= FIBF_READ
+	}
+	if perm&0200 == 0 {
+		prot |= FIBF_WRITE
+	}
+	if perm&0100 == 0 {
+		prot |= FIBF_EXECUTE
+	}
+	for _, b := range [...]struct{ perm, prot uint32 }{
+		{0040, FIBF_GRP_READ}, {0020, FIBF_GRP_WRITE}, {0010, FIBF_GRP_EXECUTE},
+		{0004, FIBF_OTR_READ}, {0002, FIBF_OTR_WRITE}, {0001, FIBF_OTR_EXECUTE},
+	} {
+		if perm&b.perm != 0 {
+			prot |= b.prot
+		}
+	}
+	return prot
+}
+
+// Perm returns fib's protection as Unix permission bits.
+func (fib *FileInfoBlock) Perm() uint32 {
+	prot := uint32(fib.Protection)
+	var perm uint32
+	if prot&FIBF_SCRIPT != 0 {
+		perm |= 0111
+	}
+	if prot&FIBF_EXECUTE == 0 {
+		perm |= 0100
+	}
+	if prot&FIBF_WRITE == 0 {
+		perm |= 0200
+	}
+	if prot&FIBF_READ == 0 {
+		perm |= 0400
+	}
+	for _, b := range [...]struct{ perm, prot uint32 }{
+		{0040, FIBF_GRP_READ}, {0020, FIBF_GRP_WRITE}, {0010, FIBF_GRP_EXECUTE},
+		{0004, FIBF_OTR_READ}, {0002, FIBF_OTR_WRITE}, {0001, FIBF_OTR_EXECUTE},
+	} {
+		if prot&b.prot != 0 {
+			perm |= b.perm
+		}
+	}
+	return perm
+}
+
+// Chmod sets path's permission bits to perm, keeping its other protection
+// bits (D, A, P, S, H).
+func Chmod(path string, perm uint32) error {
+	lock, err := Lock(path, LockShared)
+	if err != nil {
+		return err
+	}
+	var fib FileInfoBlock
+	err = Examine(lock, &fib)
+	UnLock(lock)
+	if err != nil {
+		return err
+	}
+	return SetProtection(path, uint32(fib.Protection)&^permProtMask|permProt(perm))
+}
+
 // SetFileDate sets path's date.
 func SetFileDate(path string, ds *DateStamp) error {
 	p, err := dosPath(path)
@@ -398,9 +531,23 @@ func SetFileDate(path string, ds *DateStamp) error {
 
 // NameFromLock returns lock's full name as a Go path (goPath).
 func NameFromLock(lock Handle) (string, error) {
+	return nameFrom(_LVO_NameFromLock, uintptr(lock))
+}
+
+// NameFromFH returns the full name of fd's file as a Go path.
+func NameFromFH(fd Handle) (string, error) {
+	if fd == 0 {
+		return "", EINVAL
+	}
+	return nameFrom(_LVO_NameFromFH, uintptr(fd))
+}
+
+// nameFrom calls NameFromLock or NameFromFH with a buffer that grows until
+// the name fits.
+func nameFrom(lvo, arg uintptr) (string, error) {
 	for n := 256; ; n *= 2 {
 		buf := make([]byte, n)
-		r, e := dosCall(_LVO_NameFromLock, uintptr(lock), uintptr(unsafe.Pointer(&buf[0])), uintptr(n), dosBase, 0)
+		r, e := dosCall(lvo, arg, uintptr(unsafe.Pointer(&buf[0])), uintptr(n), dosBase, 0)
 		if int16(r) != 0 {
 			return goPath(cstring(buf))
 		}
@@ -419,8 +566,7 @@ var cwdLock sync.Mutex
 func Getwd() (string, error) {
 	cwdLock.Lock()
 	defer cwdLock.Unlock()
-	t, _ := aroscall(*(*uintptr)(unsafe.Pointer(sysBase - 8*_LVO_FindTask)), 0, sysBase, 0, 0, 0, 0)
-	return NameFromLock(*(*Handle)(unsafe.Pointer(t + _Process_pr_CurrentDir)))
+	return NameFromLock(*(*Handle)(unsafe.Pointer(findTask() + _Process_pr_CurrentDir)))
 }
 
 // Chdir makes path the current directory. The lock it replaces is unlocked
@@ -440,11 +586,51 @@ func Chdir(path string) error {
 		UnLock(lock)
 		return ENOTDIR
 	}
+	setCurrentDir(lock)
+	return nil
+}
+
+// Fchdir makes the directory lock locks the current directory. It takes a
+// lock of its own (DupLock): the caller keeps lock.
+func Fchdir(lock Handle) error {
+	var fib FileInfoBlock
+	if err := Examine(lock, &fib); err != nil {
+		return err
+	}
+	if fib.DirEntryType < 0 {
+		return ENOTDIR
+	}
+	l, err := DupLock(lock)
+	if err != nil {
+		return err
+	}
+	setCurrentDir(l)
+	return nil
+}
+
+// setCurrentDir makes lock, which it takes over, the current directory.
+func setCurrentDir(lock Handle) {
 	cwdLock.Lock()
 	old, _ := dosCall(_LVO_CurrentDir, uintptr(lock), dosBase, 0, 0, 0)
 	if old != arosShellDir() {
 		UnLock(Handle(old))
 	}
 	cwdLock.Unlock()
-	return nil
+}
+
+// GetProgramDir returns the lock on the program's directory (PROGDIR:). It
+// belongs to the shell: don't UnLock it.
+func GetProgramDir() Handle {
+	r, _ := dosCall(_LVO_GetProgramDir, dosBase, 0, 0, 0, 0)
+	return Handle(r)
+}
+
+// GetProgramName returns the program's name as the shell gave it, as a Go
+// path: absolute ("SYS:x/prog") or relative to GetProgramDir.
+func GetProgramName() (string, error) {
+	var buf [256]byte
+	if r, e := dosCall(_LVO_GetProgramName, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), dosBase, 0, 0); int16(r) == 0 {
+		return "", e
+	}
+	return goPath(cstring(buf[:]))
 }

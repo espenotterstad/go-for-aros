@@ -6,29 +6,33 @@ package syscall
 
 // Library vector offsets: a function is the pointer at base - 8*LVO.
 const (
-	_LVO_FindTask      = 49  // exec
-	_LVO_Open          = 5   // dos
-	_LVO_Close         = 6   // dos
-	_LVO_Read          = 7   // dos
-	_LVO_Write         = 8   // dos
-	_LVO_Seek          = 11  // dos
-	_LVO_SetFileSize   = 76  // dos
-	_LVO_Lock          = 14  // dos
-	_LVO_UnLock        = 15  // dos
-	_LVO_Examine       = 17  // dos
-	_LVO_ExNext        = 18  // dos
-	_LVO_ExamineFH     = 65  // dos
-	_LVO_CreateDir     = 20  // dos
-	_LVO_DeleteFile    = 12  // dos
-	_LVO_Rename        = 13  // dos
-	_LVO_SetProtection = 31  // dos
-	_LVO_SetFileDate   = 66  // dos
-	_LVO_NameFromLock  = 67  // dos
-	_LVO_CurrentDir    = 21  // dos
-	_LVO_Fault         = 78  // dos
-	_LVO_Input         = 9   // dos
-	_LVO_Output        = 10  // dos
-	_LVO_GetVar        = 151 // dos
+	_LVO_FindTask       = 49  // exec
+	_LVO_Open           = 5   // dos
+	_LVO_Close          = 6   // dos
+	_LVO_Read           = 7   // dos
+	_LVO_Write          = 8   // dos
+	_LVO_Seek           = 11  // dos
+	_LVO_SetFileSize    = 76  // dos
+	_LVO_Lock           = 14  // dos
+	_LVO_UnLock         = 15  // dos
+	_LVO_Examine        = 17  // dos
+	_LVO_ExNext         = 18  // dos
+	_LVO_ExamineFH      = 65  // dos
+	_LVO_CreateDir      = 20  // dos
+	_LVO_DeleteFile     = 12  // dos
+	_LVO_Rename         = 13  // dos
+	_LVO_SetProtection  = 31  // dos
+	_LVO_SetFileDate    = 66  // dos
+	_LVO_NameFromLock   = 67  // dos
+	_LVO_CurrentDir     = 21  // dos
+	_LVO_Fault          = 78  // dos
+	_LVO_Input          = 9   // dos
+	_LVO_Output         = 10  // dos
+	_LVO_GetVar         = 151 // dos
+	_LVO_DupLock        = 16  // dos
+	_LVO_NameFromFH     = 68  // dos
+	_LVO_GetProgramDir  = 100 // dos
+	_LVO_GetProgramName = 96  // dos
 )
 
 // dos error codes (IoErr), as Errno.
@@ -55,6 +59,7 @@ const (
 	ERROR_READ_PROTECTED         Errno = 224
 	ERROR_NO_DISK                Errno = 226
 	ERROR_NO_MORE_ENTRIES        Errno = 232
+	ERROR_IS_SOFT_LINK           Errno = 233
 	ERROR_NOT_IMPLEMENTED        Errno = 236
 	ERROR_BUFFER_OVERFLOW        Errno = 303
 )
@@ -69,7 +74,7 @@ const (
 	_OFFSET_CURRENT                 = 0
 	_OFFSET_END                     = 1
 	_FAULT_MAX                      = 82
-	_TICKS_PER_SECOND               = 50
+	TICKS_PER_SECOND                = 50
 	_GVF_GLOBAL_ONLY                = 256
 	_GVF_LOCAL_ONLY                 = 512
 	_GVF_BINARY_VAR                 = 1024
@@ -90,4 +95,30 @@ const (
 	_FileInfoBlock_fib_Date         = 136
 	_FileInfoBlock_fib_Comment      = 148
 	_sizeof_DateStamp               = 12
+	_Task_tc_Flags                  = 32
+	_TF_ETASK                       = 8
+	_Task_tc_ETask                  = 56
+	_ETask_et_UniqueID              = 56
+	FIBF_DELETE                     = 1
+	FIBF_EXECUTE                    = 2
+	FIBF_WRITE                      = 4
+	FIBF_READ                       = 8
+	FIBF_ARCHIVE                    = 16
+	FIBF_PURE                       = 32
+	FIBF_SCRIPT                     = 64
+	FIBF_GRP_DELETE                 = 256
+	FIBF_GRP_EXECUTE                = 512
+	FIBF_GRP_WRITE                  = 1024
+	FIBF_GRP_READ                   = 2048
+	FIBF_OTR_DELETE                 = 4096
+	FIBF_OTR_EXECUTE                = 8192
+	FIBF_OTR_WRITE                  = 16384
+	FIBF_OTR_READ                   = 32768
+	ST_ROOT                         = 1
+	ST_USERDIR                      = 2
+	ST_SOFTLINK                     = 3
+	ST_LINKDIR                      = 4
+	ST_FILE                         = -3
+	ST_LINKFILE                     = -4
+	ST_PIPEFILE                     = -5
 )

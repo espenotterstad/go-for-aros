@@ -6,6 +6,8 @@
 
 package runtime
 
+import _ "unsafe" // for go:linkname
+
 // AROS has no Unix signals. Faults reach tc_TrapCode (F1, arosTrap in
 // sys_aros_arm64.s); preemption is a context injection (A9, milestone 3).
 // Until then the rest is inert.
@@ -53,3 +55,8 @@ func signal_disable(s uint32)      {}
 func signal_ignore(s uint32)       {}
 func signal_ignored(s uint32) bool { return true }
 func signal_recv() uint32          { return 0 }
+
+// signalWaitUntilIdle is os/signal's: no signal is ever on its way to it.
+//
+//go:linkname signalWaitUntilIdle os/signal.signalWaitUntilIdle
+func signalWaitUntilIdle() {}

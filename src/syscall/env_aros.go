@@ -41,7 +41,9 @@ func envFold(s string) string {
 }
 
 // getVar reads AROS variable key with GetVar flags, growing the buffer to
-// the variable's length (IoErr after a GetVar that fits or is cut).
+// the variable's length (IoErr after a GetVar that fits or is cut). The
+// value ends at its first NUL, as AROS programs read it: AROSTCP stores
+// HOSTNAME with its whole buffer (go/HANDOFF.md F24).
 func getVar(key string, flags uintptr) (string, bool) {
 	k, err := BytePtrFromString(key)
 	if err != nil {
@@ -55,7 +57,7 @@ func getVar(key string, flags uintptr) (string, bool) {
 			return "", false
 		}
 		if int(e) < n || n >= 1<<20 {
-			return string(buf[:got]), true
+			return cstring(buf[:got]), true
 		}
 		n = int(e) + 1
 	}

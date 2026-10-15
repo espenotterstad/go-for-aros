@@ -510,3 +510,14 @@ func syscall_arosShellDir() uintptr { return arosShellDir }
 //
 //go:linkname time_arosLocalOffset time.arosLocalOffset
 func time_arosLocalOffset() int { return int(-arosUTCOffset) }
+
+// os_arosLocalOffset gives package os the same offset, to convert file
+// dates (DateStamps on AROS's clock) to and from UTC.
+//
+//go:linkname os_arosLocalOffset os.arosLocalOffset
+func os_arosLocalOffset() int { return int(-arosUTCOffset) }
+
+// syscall_gettimeofday is syscall.Gettimeofday's clock: wall time in UTC.
+//
+//go:linkname syscall_gettimeofday syscall.gettimeofday
+func syscall_gettimeofday() (sec int64, nsec int32) { return walltime() }

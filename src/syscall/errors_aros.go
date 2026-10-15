@@ -18,20 +18,28 @@ import (
 type Errno uintptr
 
 const (
-	ENOENT    = ERROR_OBJECT_NOT_FOUND
-	EEXIST    = ERROR_OBJECT_EXISTS
-	ENOTEMPTY = ERROR_DIRECTORY_NOT_EMPTY
-	ENOSYS    = ERROR_NOT_IMPLEMENTED
+	ENOENT       = ERROR_OBJECT_NOT_FOUND
+	EEXIST       = ERROR_OBJECT_EXISTS
+	ENOTEMPTY    = ERROR_DIRECTORY_NOT_EMPTY
+	ENOSYS       = ERROR_NOT_IMPLEMENTED
+	ENOMEM       = ERROR_NO_FREE_STORE
+	ENAMETOOLONG = ERROR_LINE_TOO_LONG
 )
 
 const (
 	EINVAL Errno = 1<<16 + iota
 	ENOTDIR
+	EISDIR
+	ERANGE
+	EPIPE
 )
 
 var errorText = [...]string{
 	EINVAL - EINVAL:  "invalid argument",
 	ENOTDIR - EINVAL: "not a directory",
+	EISDIR - EINVAL:  "is a directory",
+	ERANGE - EINVAL:  "result out of range",
+	EPIPE - EINVAL:   "broken pipe",
 }
 
 // Error returns dos's text for its codes (Fault), Go's for the invented
