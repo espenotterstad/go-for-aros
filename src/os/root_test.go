@@ -13,7 +13,6 @@ import (
 	"io"
 	"io/fs"
 	"iter"
-	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -1266,22 +1265,6 @@ var rootConsistencyTestCases = []rootConsistencyTest{{
 	name: "nul byte",
 	open: "\x00",
 }}
-
-func tempDirWithUnixSocket(t *testing.T, name string) string {
-	dir := t.TempDir()
-	addr, err := net.ResolveUnixAddr("unix", filepath.Join(dir, name))
-	if err != nil {
-		t.Skipf("net.ResolveUnixAddr: %v", err)
-	}
-	conn, err := net.ListenUnix("unix", addr)
-	if err != nil {
-		t.Skipf("net.ListenUnix: %v", err)
-	}
-	t.Cleanup(func() {
-		conn.Close()
-	})
-	return dir
-}
 
 func (test rootConsistencyTest) run(t *testing.T, f func(t *testing.T, path string, r *os.Root) (string, error)) {
 	if runtime.GOOS == "wasip1" {

@@ -32,6 +32,9 @@ const (
 	EISDIR
 	ERANGE
 	EPIPE
+	EACCES
+	EPERM
+	ESPIPE
 )
 
 var errorText = [...]string{
@@ -40,6 +43,9 @@ var errorText = [...]string{
 	EISDIR - EINVAL:  "is a directory",
 	ERANGE - EINVAL:  "result out of range",
 	EPIPE - EINVAL:   "broken pipe",
+	EACCES - EINVAL:  "permission denied",
+	EPERM - EINVAL:   "operation not permitted",
+	ESPIPE - EINVAL:  "illegal seek",
 }
 
 // Error returns dos's text for its codes (Fault), Go's for the invented
