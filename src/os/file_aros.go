@@ -245,8 +245,13 @@ func (f *File) Truncate(size int64) error {
 		return err
 	}
 	defer f.decref()
-	err := error(syscall.EISDIR)
-	if !f.isDir {
+	var err error
+	switch {
+	case f.isDir:
+		err = syscall.EISDIR
+	case f.rdonly:
+		err = syscall.EINVAL // not open for writing, as ftruncate says
+	default:
 		err = f.truncate(size)
 	}
 	if err != nil {
@@ -279,10 +284,23 @@ func (f *File) truncate(size int64) error {
 	return err
 }
 
+// pastEnd reports whether farPos is still past the end. A farPos the file
+// reaches now (WriteAt, another handle) is dos's position again.
+func (f *File) pastEnd() bool {
+	if f.farPos == 0 {
+		return false
+	}
+	if _, err := syscall.Seek(f.sysfd, f.farPos, io.SeekStart); err != nil {
+		return true // dos refused it and kept its position
+	}
+	f.farPos = 0
+	return false
+}
+
 // growToFarPos makes the file reach farPos before a write there, as Unix
 // does (dos fills the new bytes with zeros), and seeks to it.
 func (f *File) growToFarPos() error {
-	if f.farPos == 0 || f.appendMode {
+	if f.farPos == 0 || f.appendMode || !f.pastEnd() {
 		return nil
 	}
 	if err := syscall.Ftruncate(f.sysfd, f.farPos); err != nil {
@@ -340,8 +358,8 @@ func (f *File) read(b []byte) (n int, err error) {
 	if f.wronly {
 		return 0, syscall.EBADF
 	}
-	if f.farPos > 0 {
-		return 0, io.EOF // past the end
+	if f.pastEnd() {
+		return 0, io.EOF
 	}
 	n, e := syscall.Read(f.sysfd, b)
 	if n == 0 && len(b) > 0 && e == nil {
