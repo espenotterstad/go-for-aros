@@ -182,6 +182,13 @@ func GoToolPath(t testing.TB) string {
 
 var findGOROOT = sync.OnceValues(func() (path string, err error) {
 	if path := runtime.GOROOT(); path != "" {
+		if runtime.GOOS == "aros" {
+			// The test runs inside AROS, which doesn't see the host's
+			// files.
+			if _, err := os.Stat(path); err != nil {
+				return "", fmt.Errorf("GOROOT %s isn't reachable on aros: %w", path, err)
+			}
+		}
 		// If runtime.GOROOT() is non-empty, assume that it is valid.
 		//
 		// (It might not be: for example, the user may have explicitly set GOROOT
