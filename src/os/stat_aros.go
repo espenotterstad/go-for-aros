@@ -85,8 +85,22 @@ func fileStatFromFH(fd syscall.Handle) (*fileStat, error) {
 	return fileStatFromFIB(&fib, path), nil
 }
 
+// isNIL reports whether name is NIL:, dos's null device, which has no
+// handler to Lock or Examine.
+func isNIL(name string) bool {
+	return len(name) == 4 && name[3] == ':' && name[0]|0x20 == 'n' && name[1]|0x20 == 'i' && name[2]|0x20 == 'l'
+}
+
+// nilStat describes NIL: as Unix describes /dev/null: a character device.
+func nilStat(name string) *fileStat {
+	return &fileStat{name: name, mode: ModeDevice | ModeCharDevice | 0666, path: DevNull}
+}
+
 // statNolog implements Stat for AROS. dos follows soft links in Lock.
 func statNolog(name string) (FileInfo, error) {
+	if isNIL(name) {
+		return nilStat(name), nil
+	}
 	lock, err := syscall.Lock(name, syscall.LockShared)
 	if err != nil {
 		return nil, &PathError{Op: "stat", Path: name, Err: err}

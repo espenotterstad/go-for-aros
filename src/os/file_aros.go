@@ -32,6 +32,9 @@ type file struct {
 	name       string
 	dirinfo    atomic.Pointer[dirInfo] // nil unless directory being read
 	appendMode bool                    // whether file is opened for appending
+	rdonly     bool                    // opened O_RDONLY: Write gives EBADF (dos opens every file read-write)
+	wronly     bool                    // opened O_WRONLY: Read gives EBADF
+	farPos     int64                   // a position past the end that dos refused (seek), else 0
 }
 
 // fd is the AROS implementation of Fd: the dos handle, or the lock of a
@@ -142,6 +145,8 @@ func openFileNolog(name string, flag int, perm FileMode) (*File, error) {
 	}
 	f := newFileFromNewFile(uintptr(fd), name)
 	f.appendMode = flag&O_APPEND != 0
+	f.rdonly = flag&(O_WRONLY|O_RDWR) == 0
+	f.wronly = flag&O_WRONLY != 0
 	return f, nil
 }
 
@@ -214,9 +219,12 @@ func (f *File) Stat() (FileInfo, error) {
 	defer f.decref()
 	var fs *fileStat
 	var err error
-	if f.isDir {
+	switch {
+	case isNIL(f.name):
+		return nilStat(f.name), nil
+	case f.isDir:
 		fs, err = fileStatFromLock(f.sysfd)
-	} else {
+	default:
 		fs, err = fileStatFromFH(f.sysfd)
 	}
 	if err != nil {
@@ -227,8 +235,7 @@ func (f *File) Stat() (FileInfo, error) {
 }
 
 // Truncate changes the size of the file.
-// It does not change the I/O offset, except that on RAM: an offset past
-// the new end moves back to it.
+// It does not change the I/O offset.
 // If there is an error, it will be of type [*PathError].
 func (f *File) Truncate(size int64) error {
 	if f == nil {
@@ -240,11 +247,51 @@ func (f *File) Truncate(size int64) error {
 	defer f.decref()
 	err := error(syscall.EISDIR)
 	if !f.isDir {
-		err = syscall.Ftruncate(f.sysfd, size)
+		err = f.truncate(size)
 	}
 	if err != nil {
 		return &PathError{Op: "truncate", Path: f.name, Err: err}
 	}
+	return nil
+}
+
+// truncate sets the size, keeping the position: one past the new end
+// (ram-handler moves it back to the end, go/HANDOFF.md F24b) becomes
+// farPos, and a farPos the file now reaches is dos's position again.
+func (f *File) truncate(size int64) error {
+	cur := f.farPos
+	if cur == 0 {
+		var err error
+		if cur, err = syscall.Seek(f.sysfd, 0, io.SeekCurrent); err != nil {
+			return err
+		}
+	}
+	if err := syscall.Ftruncate(f.sysfd, size); err != nil {
+		return err
+	}
+	if cur > size {
+		f.farPos = cur
+		_, err := syscall.Seek(f.sysfd, 0, io.SeekEnd)
+		return err
+	}
+	f.farPos = 0
+	_, err := syscall.Seek(f.sysfd, cur, io.SeekStart)
+	return err
+}
+
+// growToFarPos makes the file reach farPos before a write there, as Unix
+// does (dos fills the new bytes with zeros), and seeks to it.
+func (f *File) growToFarPos() error {
+	if f.farPos == 0 || f.appendMode {
+		return nil
+	}
+	if err := syscall.Ftruncate(f.sysfd, f.farPos); err != nil {
+		return err
+	}
+	if _, err := syscall.Seek(f.sysfd, f.farPos, io.SeekStart); err != nil {
+		return err
+	}
+	f.farPos = 0
 	return nil
 }
 
@@ -290,6 +337,12 @@ func (f *File) read(b []byte) (n int, err error) {
 	if f.isDir {
 		return 0, syscall.EISDIR
 	}
+	if f.wronly {
+		return 0, syscall.EBADF
+	}
+	if f.farPos > 0 {
+		return 0, io.EOF // past the end
+	}
 	n, e := syscall.Read(f.sysfd, b)
 	if n == 0 && len(b) > 0 && e == nil {
 		return 0, io.EOF
@@ -313,6 +366,9 @@ func (f *File) pread(b []byte, off int64) (n int, err error) {
 	defer f.writeUnlock()
 	if f.isDir {
 		return 0, syscall.EISDIR
+	}
+	if f.wronly {
+		return 0, syscall.EBADF
 	}
 	err = f.at(off, func() error {
 		n, err = syscall.Read(f.sysfd, b)
@@ -350,6 +406,12 @@ func (f *File) write(b []byte) (n int, err error) {
 	if f.isDir {
 		return 0, syscall.EISDIR
 	}
+	if f.rdonly {
+		return 0, syscall.EBADF
+	}
+	if err := f.growToFarPos(); err != nil {
+		return 0, err
+	}
 	for n < len(b) {
 		m, err := syscall.Write(f.sysfd, b[n:])
 		n += m
@@ -374,6 +436,9 @@ func (f *File) pwrite(b []byte, off int64) (n int, err error) {
 	defer f.writeUnlock()
 	if f.isDir {
 		return 0, syscall.EISDIR
+	}
+	if f.rdonly {
+		return 0, syscall.EBADF
 	}
 	err = f.at(off, func() error {
 		for n < len(b) {
@@ -407,7 +472,42 @@ func (f *File) seek(offset int64, whence int) (ret int64, err error) {
 		}
 		return 0, nil
 	}
-	return syscall.Seek(f.sysfd, offset, whence)
+	if whence == io.SeekCurrent && f.farPos > 0 {
+		offset, whence = f.farPos+offset, io.SeekStart
+	}
+	ret, err = syscall.Seek(f.sysfd, offset, whence)
+	if err == nil {
+		f.farPos = 0
+		return ret, nil
+	}
+	return f.seekPastEnd(offset, whence, err)
+}
+
+// seekPastEnd handles a seek dos refused: a position past the end becomes
+// farPos, with dos's position at the end, and the next write grows the file
+// to it (growToFarPos); any other position gives err.
+func (f *File) seekPastEnd(offset int64, whence int, err error) (int64, error) {
+	cur, e := syscall.Seek(f.sysfd, 0, io.SeekCurrent)
+	if e != nil {
+		return 0, err
+	}
+	end, e := syscall.Seek(f.sysfd, 0, io.SeekEnd)
+	if e != nil {
+		return 0, err
+	}
+	pos := offset
+	switch whence {
+	case io.SeekCurrent:
+		pos += cur
+	case io.SeekEnd:
+		pos += end
+	}
+	if pos <= end || pos != int64(int32(pos)) {
+		syscall.Seek(f.sysfd, cur, io.SeekStart)
+		return 0, err
+	}
+	f.farPos = pos
+	return pos, nil
 }
 
 // Truncate changes the size of the named file.
@@ -450,6 +550,14 @@ func Remove(name string) error {
 // refused (EEXIST) as on Unix. Names of the same object differ only in
 // case: dos Rename gets those (the hosted handler refuses them, F24).
 func rename(oldname, newname string) error {
+	if err := checkTrailingSlash(oldname, false); err != nil {
+		return &LinkError{"rename", oldname, newname, err}
+	}
+	if hasTrailingSlash(newname) {
+		if fi, err := Stat(oldname); err == nil && !fi.IsDir() {
+			return &LinkError{"rename", oldname, newname, syscall.ENOTDIR}
+		}
+	}
 	if fi, err := Lstat(newname); err == nil {
 		ofi, err := Lstat(oldname)
 		if err != nil {
@@ -484,7 +592,11 @@ func rename(oldname, newname string) error {
 
 // See docs in file.go:Chmod.
 func chmod(name string, mode FileMode) error {
-	if e := syscall.Chmod(name, syscallMode(mode)); e != nil {
+	e := checkTrailingSlash(name, false)
+	if e == nil {
+		e = syscall.Chmod(name, syscallMode(mode))
+	}
+	if e != nil {
 		return &PathError{Op: "chmod", Path: name, Err: e}
 	}
 	return nil
@@ -499,13 +611,13 @@ func chmod(name string, mode FileMode) error {
 // sets it from mtime and ignores atime.
 // If there is an error, it will be of type [*PathError].
 func Chtimes(name string, atime time.Time, mtime time.Time) error {
-	var err error
-	if mtime.IsZero() {
+	err := checkTrailingSlash(name, false)
+	if err == nil && mtime.IsZero() {
 		_, err = Stat(name)
 		if pe, ok := err.(*PathError); ok {
 			err = pe.Err
 		}
-	} else {
+	} else if err == nil {
 		var ds syscall.DateStamp
 		if ds, err = dateStamp(mtime); err == nil {
 			err = syscall.SetFileDate(name, &ds)
