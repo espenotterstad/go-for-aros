@@ -265,6 +265,14 @@ var plan9localizetests = []LocalizeTest{
 	{`a\b:c`, `a\b:c`},
 }
 
+// A ':' would end a volume name on aros (go/HANDOFF.md D15).
+var aroslocalizetests = []LocalizeTest{
+	{"#a", "#a"},
+	{`a\b:c`, ""},
+	{`a:b`, ""},
+	{`c:`, ""},
+}
+
 var unixlocalizetests = []LocalizeTest{
 	{"#a", "#a"},
 	{`a\b:c`, `a\b:c`},
@@ -287,6 +295,8 @@ func TestLocalize(t *testing.T) {
 	switch runtime.GOOS {
 	case "plan9":
 		tests = append(tests, plan9localizetests...)
+	case "aros":
+		tests = append(tests, aroslocalizetests...)
 	case "windows":
 		tests = append(tests, winlocalizetests...)
 		for i := range tests {
@@ -654,6 +664,9 @@ func testWalk(t *testing.T, walk func(string, fs.WalkDirFunc) error, errVisit in
 		// Chmod is not supported on wasip1.
 		if runtime.GOOS == "windows" || runtime.GOOS == "wasip1" {
 			t.Skip("skipping on " + runtime.GOOS)
+		}
+		if runtime.GOOS == "aros" {
+			t.Skip("skipping on aros: a directory's protection doesn't stop listing it")
 		}
 		if os.Getuid() == 0 {
 			t.Skip("skipping as root")
@@ -1109,6 +1122,13 @@ func TestIsAbs(t *testing.T) {
 		// All non-windows test should work as intended if prefixed with volume letter.
 		for _, test := range isabstests {
 			tests = append(tests, IsAbsTest{"c:" + test.path, test.isAbs})
+		}
+	} else if runtime.GOOS == "aros" {
+		// A path is absolute when it has a volume name; a leading '/' is
+		// the root of the current volume (go/HANDOFF.md D15).
+		for _, test := range isabstests {
+			tests = append(tests, IsAbsTest{test.path, false})
+			tests = append(tests, IsAbsTest{"Work:" + test.path, true})
 		}
 	} else {
 		tests = isabstests

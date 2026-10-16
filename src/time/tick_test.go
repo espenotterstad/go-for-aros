@@ -154,6 +154,11 @@ func TestLongAdjustTimers(t *testing.T) {
 	if runtime.GOOS == "android" || runtime.GOOS == "ios" || runtime.GOOS == "plan9" {
 		t.Skipf("skipping on %s - too slow", runtime.GOOS)
 	}
+	if runtime.GOOS == "aros" {
+		// 5000 goroutines at aros's 16 KB minimum stack need 80 MB, above
+		// the default 64 MB heap (GOAROSHEAP).
+		t.Skip("skipping on aros: the goroutines' stacks don't fit the default heap")
+	}
 	if testing.Short() && runtime.NumCPU() < 2 {
 		t.Skipf("skipping in short mode, insufficient CPUs")
 	}

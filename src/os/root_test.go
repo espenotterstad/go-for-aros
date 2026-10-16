@@ -522,7 +522,7 @@ func TestRootChtimes(t *testing.T) {
 				mtime: time.Time{},
 			}} {
 				switch runtime.GOOS {
-				case "js", "plan9":
+				case "js", "plan9", "aros":
 					times.atime = times.atime.Truncate(1 * time.Second)
 					times.mtime = times.mtime.Truncate(1 * time.Second)
 				case "illumos":
@@ -1640,7 +1640,7 @@ func TestRootRenameAfterOpen(t *testing.T) {
 	switch runtime.GOOS {
 	case "windows":
 		t.Skip("renaming open files not supported on " + runtime.GOOS)
-	case "js", "plan9":
+	case "js", "plan9", "aros":
 		t.Skip("openat not supported on " + runtime.GOOS)
 	case "wasip1":
 		if os.Getenv("GOWASIRUNTIME") == "wazero" {
@@ -1769,8 +1769,9 @@ func TestRootConcurrentClose(t *testing.T) {
 				first = false
 			}
 			f.Close()
-			if runtime.GOARCH == "wasm" {
+			if runtime.GOARCH == "wasm" || runtime.GOOS == "aros" {
 				// TODO(go.dev/issue/71134) can lead to goroutine starvation.
+				// aros runs one thread and doesn't preempt yet.
 				runtime.Gosched()
 			}
 		}
@@ -1841,9 +1842,10 @@ func TestRootRaceRenameDir(t *testing.T) {
 			f, err := r.Open(path)
 			if err != nil {
 				gotc <- nil
+				return
 			}
-			defer f.Close()
 			b, _ := io.ReadAll(f)
+			f.Close() // before the test ends: dos can't remove an open file
 			gotc <- b
 		}()
 
@@ -2797,6 +2799,7 @@ func dirTreeContents(t *testing.T, dir string) (contents []string) {
 				ent += " (unreadable)"
 			} else {
 				content, err := io.ReadAll(f)
+				f.Close() // dos can't remove an open file
 				if err != nil {
 					t.Fatal(err)
 				}

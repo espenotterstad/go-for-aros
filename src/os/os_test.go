@@ -108,6 +108,15 @@ var sysdir = func() *sysDir {
 				"local",
 			},
 		}
+	case "aros":
+		return &sysDir{
+			"SYS:C",
+			[]string{
+				"Dir",
+				"List",
+				"Copy",
+			},
+		}
 	case "wasip1":
 		// wasmtime has issues resolving symbolic links that are often present
 		// in directories like /etc/group below (e.g. private/etc/group on OSX).
@@ -626,6 +635,8 @@ func TestReaddirnamesOneAtATime(t *testing.T) {
 	// big directory that doesn't change often.
 	dir := "/usr/bin"
 	switch runtime.GOOS {
+	case "aros":
+		dir = "SYS:C"
 	case "android":
 		dir = "/system/bin"
 	case "ios", "wasip1":
@@ -758,7 +769,7 @@ func touch(t *testing.T, name string) {
 
 func TestReaddirStatFailures(t *testing.T) {
 	switch runtime.GOOS {
-	case "windows", "plan9":
+	case "windows", "plan9", "aros":
 		// Windows and Plan 9 already do this correctly,
 		// but are structured with different syscalls such
 		// that they don't use Lstat, so the hook below for
@@ -1331,6 +1342,9 @@ func TestFTruncate(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
+	if runtime.GOOS == "aros" {
+		t.Skip("skipping on aros: ram-handler moves another handle's position back to the new end")
+	}
 	t.Parallel()
 
 	f := newFile(t)
@@ -1473,6 +1487,8 @@ func testChtimesOmit(t *testing.T, omitAt, omitMt bool) {
 				t.Log(errormsg)
 				t.Log("Known DragonFly BSD issue (atime not supported on hammer2); ignoring.")
 			}
+		case "aros":
+			// dos keeps one date per file: atime is mtime.
 		case "netbsd":
 			if !omitAt && hasNoatime() {
 				t.Log(errormsg)
@@ -1555,6 +1571,9 @@ func testChtimes(t *testing.T, name string) {
 }
 
 func TestChtimesToUnixZero(t *testing.T) {
+	if runtime.GOOS == "aros" {
+		t.Skip("skipping on aros: dos dates start in 1978")
+	}
 	file := newFile(t)
 	fn := file.Name()
 	if _, err := file.Write([]byte("hi")); err != nil {
@@ -1677,6 +1696,10 @@ func TestChdirAndGetwd(t *testing.T) {
 		dirs = []string{"/system/bin"}
 	case "plan9":
 		dirs = []string{"/", "/usr"}
+	case "aros":
+		// Getwd gives the names dos gives (NameFromLock): the volume's,
+		// not an assign's.
+		dirs = []string{"RAM Disk:", "RAM Disk:T"}
 	case "ios", "windows", "wasip1":
 		dirs = nil
 		for _, dir := range []string{t.TempDir(), t.TempDir()} {
@@ -1826,6 +1849,9 @@ func TestSeek(t *testing.T) {
 		{0, io.SeekCurrent, 2<<32 - 1},
 	}
 	for i, tt := range tests {
+		if runtime.GOOS == "aros" && tt.out > 1<<31-1 {
+			continue // dos offsets are 32-bit
+		}
 		off, err := f.Seek(tt.in, tt.whence)
 		if off != tt.out || err != nil {
 			t.Errorf("#%d: Seek(%v, %v) = %v, %v want %v, nil", i, tt.in, tt.whence, off, err, tt.out)
@@ -1837,6 +1863,8 @@ func TestSeekError(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("skipping test on %v", runtime.GOOS)
+	case "aros":
+		t.Skip("skipping on aros: no os.Pipe yet")
 	}
 	t.Parallel()
 
@@ -2707,6 +2735,9 @@ func TestReadAtEOF(t *testing.T) {
 }
 
 func TestLongPath(t *testing.T) {
+	if runtime.GOOS == "aros" {
+		t.Skip("skipping on aros: paths are at most 254 bytes (dos takes 255)")
+	}
 	t.Parallel()
 
 	tmpdir := t.TempDir()
@@ -2957,6 +2988,8 @@ func TestPipeThreads(t *testing.T) {
 		t.Skip("skipping on js; no support for os.Pipe")
 	case "wasip1":
 		t.Skip("skipping on wasip1; no support for os.Pipe")
+	case "aros":
+		t.Skip("skipping on aros; no support for os.Pipe yet")
 	}
 
 	threads := 100
@@ -3434,6 +3467,9 @@ func TestDirFSPathsValid(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("skipping on Windows")
 	}
+	if runtime.GOOS == "aros" {
+		t.Skip("skipping on aros: a ':' in a name would end a volume name")
+	}
 	t.Parallel()
 
 	d := t.TempDir()
@@ -3544,8 +3580,8 @@ func TestFileIOCloseRace(t *testing.T) {
 
 // Test that it's OK to have parallel I/O and Close on a pipe.
 func TestPipeIOCloseRace(t *testing.T) {
-	// Skip on wasm, which doesn't have pipes.
-	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
+	// Skip on wasm and aros, which don't have pipes.
+	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" || runtime.GOOS == "aros" {
 		t.Skipf("skipping on %s: no pipes", runtime.GOOS)
 	}
 	t.Parallel()
@@ -3622,8 +3658,8 @@ func TestPipeIOCloseRace(t *testing.T) {
 
 // Test that it's OK to call Close concurrently on a pipe.
 func TestPipeCloseRace(t *testing.T) {
-	// Skip on wasm, which doesn't have pipes.
-	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
+	// Skip on wasm and aros, which don't have pipes.
+	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" || runtime.GOOS == "aros" {
 		t.Skipf("skipping on %s: no pipes", runtime.GOOS)
 	}
 	t.Parallel()

@@ -240,6 +240,9 @@ func TestRemoveReadOnlyDir(t *testing.T) {
 // Issue #29983.
 func TestRemoveAllButReadOnlyAndPathError(t *testing.T) {
 	testRequiresPermissions(t)
+	if runtime.GOOS == "aros" {
+		t.Skip("skipping on aros: a directory's protection doesn't stop deleting its entries")
+	}
 
 	t.Parallel()
 
@@ -346,6 +349,9 @@ func TestRemoveUnreadableDir(t *testing.T) {
 func TestRemoveAllWithMoreErrorThanReqSize(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
+	}
+	if runtime.GOOS == "aros" {
+		t.Skip("skipping on aros: a directory's protection doesn't stop deleting its entries")
 	}
 	t.Parallel()
 

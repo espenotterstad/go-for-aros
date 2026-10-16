@@ -21,6 +21,9 @@ func TestProcessLiteral(t *testing.T) {
 	if runtime.GOARCH == "wasm" {
 		t.Skip("Signals send + notify not fully supported om wasm port")
 	}
+	if runtime.GOOS == "aros" {
+		t.Skip("skipping on aros: no signals yet")
+	}
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
