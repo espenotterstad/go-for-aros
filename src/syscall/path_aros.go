@@ -35,7 +35,8 @@ func arosVolumeLen(path string) int {
 // It cleans first. A ".." that would climb above a volume ("Work:..") and a
 // ':' outside the volume name are EINVAL; "" is ENOENT (dos would read it
 // as the current directory). A result of "*" is EINVAL: dos Open reads that
-// name as the console (rom/dos/open.c).
+// name as the console (rom/dos/open.c). One over maxPathLen bytes is
+// ENAMETOOLONG.
 func arosPath(p string) (string, error) {
 	if p == "" {
 		return "", ENOENT
@@ -98,8 +99,17 @@ func arosPath(p string) (string, error) {
 	if string(b) == "*" {
 		return "", EINVAL
 	}
+	if len(b) > maxPathLen {
+		return "", ENAMETOOLONG
+	}
 	return string(b), nil
 }
+
+// maxPathLen is the longest dos path: dos passes a path to its handler with
+// an 8-bit length, so a longer one names another, shorter path
+// (go/HANDOFF.md F26d), and ram-handler leaves an object it creates at
+// exactly 255 bytes locked (F27).
+const maxPathLen = 254
 
 // goPath translates AmigaDOS path p, as dos returns it (NameFromLock,
 // ReadLink, GetProgramName), to a Go path: a '/' where a name would start

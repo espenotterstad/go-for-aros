@@ -149,7 +149,7 @@ func Open(path string, mode int, perm uint32) (fd Handle, err error) {
 	}
 	r, e := dosCall(_LVO_Open, uintptr(unsafe.Pointer(p)), dmode, dosBase, 0, 0)
 	if r == 0 {
-		return 0, e
+		return 0, notFound(path, e)
 	}
 	fd = Handle(r)
 	if create && perm&0200 == 0 {
@@ -267,13 +267,48 @@ func Seek(fd Handle, offset int64, whence int) (newoffset int64, err error) {
 
 // Ftruncate sets fd's size to length. The position stays, except that
 // ram-handler moves a position past the new end back to it (go/HANDOFF.md
-// F24).
+// F24). A file grows by zeros Ftruncate writes itself: ram-handler's
+// SetFileSize leaves old memory in the bytes it adds (F27).
 func Ftruncate(fd Handle, length int64) error {
 	if fd == 0 || length < 0 || length != int64(int32(length)) {
 		return EINVAL
 	}
-	if r, e := dosCall(_LVO_SetFileSize, uintptr(fd), uintptr(length), iptr(_OFFSET_BEGINNING), dosBase, 0); int32(r) < 0 {
-		return e
+	cur, err := Seek(fd, 0, 1)
+	if err != nil {
+		return err
+	}
+	end, err := Seek(fd, 0, 2)
+	if err != nil {
+		return err
+	}
+	if length > end {
+		err = writeZeros(fd, length-end)
+	} else if r, e := dosCall(_LVO_SetFileSize, uintptr(fd), uintptr(length), iptr(_OFFSET_BEGINNING), dosBase, 0); int32(r) < 0 {
+		err = e
+	}
+	if cur > length {
+		cur = length // as ram-handler does; the hosted handler can't seek past the end either
+	}
+	if _, e := Seek(fd, cur, 0); err == nil {
+		err = e
+	}
+	return err
+}
+
+var zeros [4096]byte
+
+// writeZeros writes n zero bytes at fd's position.
+func writeZeros(fd Handle, n int64) error {
+	for n > 0 {
+		m := min(n, int64(len(zeros)))
+		w, err := Write(fd, zeros[:m])
+		if err != nil {
+			return err
+		}
+		if w == 0 {
+			return EIO
+		}
+		n -= int64(w)
 	}
 	return nil
 }
@@ -287,9 +322,59 @@ func Lock(path string, mode int) (Handle, error) {
 	}
 	r, e := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(p)), iptr(mode), dosBase, 0, 0)
 	if r == 0 {
-		return 0, e
+		return 0, notFound(path, e)
 	}
 	return Handle(r), nil
+}
+
+// notFound returns e, the error of a dos call on path, except that a name
+// under a file gives ENOTDIR, as on Unix: dos says only that the object
+// isn't there (ERROR_OBJECT_NOT_FOUND on RAM:, ERROR_DIR_NOT_FOUND on SYS:
+// for "file/x", go/HANDOFF.md F24f). It looks for the nearest parent that
+// exists.
+func notFound(path string, e Errno) Errno {
+	if e != ERROR_OBJECT_NOT_FOUND && e != ERROR_DIR_NOT_FOUND {
+		return e
+	}
+	for dir := parentPath(path); dir != ""; dir = parentPath(dir) {
+		p, err := dosPath(dir)
+		if err != nil {
+			return e
+		}
+		l, _ := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(p)), iptr(_SHARED_LOCK), dosBase, 0, 0)
+		if l == 0 {
+			continue
+		}
+		var fib FileInfoBlock
+		err = Examine(Handle(l), &fib)
+		dosCall(_LVO_UnLock, l, dosBase, 0, 0, 0)
+		if err == nil && fib.DirEntryType < 0 {
+			return ENOTDIR
+		}
+		return e
+	}
+	return e
+}
+
+// parentPath returns the Go path of path's parent directory: "a/b/" and
+// "a/b" give "a", and a name with no parent before it ("a", "Work:a",
+// "/a") gives "".
+func parentPath(path string) string {
+	vol := arosVolumeLen(path)
+	i := len(path)
+	for i > vol && path[i-1] == '/' {
+		i--
+	}
+	for i > vol && path[i-1] != '/' {
+		i--
+	}
+	for i > vol && path[i-1] == '/' {
+		i--
+	}
+	if i <= vol {
+		return ""
+	}
+	return path[:i]
 }
 
 const (
@@ -403,7 +488,7 @@ func Mkdir(path string, perm uint32) error {
 	}
 	r, e := dosCall(_LVO_CreateDir, uintptr(unsafe.Pointer(p)), dosBase, 0, 0, 0)
 	if r == 0 {
-		return e
+		return notFound(path, e)
 	}
 	UnLock(Handle(r)) // CreateDir returns an exclusive lock on the new directory
 	dosCall(_LVO_SetProtection, uintptr(unsafe.Pointer(p)), uintptr(permProt(perm)), dosBase, 0, 0)
@@ -412,8 +497,13 @@ func Mkdir(path string, perm uint32) error {
 
 // dosObject is dosPath for a call that changes the object itself: the
 // current directory, which arosPath gives as "", is EINVAL, as Unix
-// refuses rmdir(".") and rename(".", x) (go/HANDOFF.md F22e).
+// refuses rmdir(".") and rename(".", x) (go/HANDOFF.md F22e); so is a path
+// whose last name is "." or "..", which arosPath would clean to the
+// directory itself ("a/." to "a").
 func dosObject(path string) (*byte, error) {
+	if e := lastName(path); e == "." || e == ".." {
+		return nil, EINVAL
+	}
 	p, err := arosPath(path)
 	if err != nil {
 		return nil, err
@@ -424,6 +514,20 @@ func dosObject(path string) (*byte, error) {
 	return BytePtrFromString(p)
 }
 
+// lastName returns path's last name: "c" for "a/b/c" and "a/b/c/".
+func lastName(path string) string {
+	vol := arosVolumeLen(path)
+	i := len(path)
+	for i > vol && path[i-1] == '/' {
+		i--
+	}
+	j := i
+	for j > vol && path[j-1] != '/' {
+		j--
+	}
+	return path[j:i]
+}
+
 // Remove deletes a file or an empty directory (dos DeleteFile does both).
 func Remove(path string) error {
 	p, err := dosObject(path)
@@ -431,7 +535,7 @@ func Remove(path string) error {
 		return err
 	}
 	if r, e := dosCall(_LVO_DeleteFile, uintptr(unsafe.Pointer(p)), dosBase, 0, 0, 0); int16(r) == 0 {
-		return e
+		return notFound(path, e)
 	}
 	return nil
 }
@@ -448,6 +552,9 @@ func Rename(from, to string) error {
 		return err
 	}
 	if r, e := dosCall(_LVO_Rename, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(q)), dosBase, 0, 0); int32(r) == 0 {
+		if e = notFound(from, e); e != ENOTDIR {
+			e = notFound(to, e)
+		}
 		return e
 	}
 	return nil
@@ -567,13 +674,18 @@ func NameFromFH(fd Handle) (string, error) {
 // nameFrom calls NameFromLock or NameFromFH with a buffer that grows until
 // the name fits.
 func nameFrom(lvo, arg uintptr) (string, error) {
-	for n := 256; ; n *= 2 {
+	// A name dos takes is at most 255 bytes (maxPathLen), but the full name
+	// can be longer ("RAM:" is "RAM Disk:"). Start big: a NameFromLock
+	// that runs out of buffer keeps a parent locked, and its UnLock clears
+	// the ERROR_LINE_TOO_LONG it set (rom/dos/namefrom.c, go/HANDOFF.md
+	// F27), so 0 also means too long.
+	for n := 1024; ; n *= 2 {
 		buf := make([]byte, n)
 		r, e := dosCall(lvo, arg, uintptr(unsafe.Pointer(&buf[0])), uintptr(n), dosBase, 0)
 		if int16(r) != 0 {
 			return goPath(cstring(buf))
 		}
-		if e != ERROR_LINE_TOO_LONG || n >= 1<<16 {
+		if e != ERROR_LINE_TOO_LONG && e != 0 || n >= 1<<16 {
 			return "", e
 		}
 	}

@@ -35,6 +35,8 @@ const (
 	EACCES
 	EPERM
 	ESPIPE
+	EBADF
+	EIO
 )
 
 var errorText = [...]string{
@@ -46,6 +48,8 @@ var errorText = [...]string{
 	EACCES - EINVAL:  "permission denied",
 	EPERM - EINVAL:   "operation not permitted",
 	ESPIPE - EINVAL:  "illegal seek",
+	EBADF - EINVAL:   "bad file descriptor",
+	EIO - EINVAL:     "input/output error",
 }
 
 // Error returns dos's text for its codes (Fault), Go's for the invented
