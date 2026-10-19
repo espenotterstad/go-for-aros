@@ -696,6 +696,32 @@ func LstatLink(path string, fib *FileInfoBlock) (target, dir string, err error) 
 	return t, dir, err
 }
 
+// Symlink makes newpath a soft link to oldpath (dos MakeLink, LINK_SOFT),
+// with oldpath translated name by name (linkTarget), so Readlink gives it
+// back. An existing link at newpath is EEXIST (dos says
+// ERROR_IS_SOFT_LINK).
+func Symlink(oldpath, newpath string) error {
+	t, err := linkTarget(oldpath)
+	if err != nil {
+		return err
+	}
+	q, err := dosObject(newpath)
+	if err != nil {
+		return err
+	}
+	tp, err := BytePtrFromString(t)
+	if err != nil {
+		return err
+	}
+	if r, e := dosCall(_LVO_MakeLink, uintptr(unsafe.Pointer(q)), uintptr(unsafe.Pointer(tp)), _LINK_SOFT, dosBase, 0); int32(r) == 0 {
+		if e == ERROR_IS_SOFT_LINK {
+			return ERROR_OBJECT_EXISTS // newpath is a soft link
+		}
+		return notFound(newpath, e)
+	}
+	return nil
+}
+
 // SetProtection sets path's dos protection bits (RWED active-low, the
 // rest active-high).
 func SetProtection(path string, mask uint32) error {

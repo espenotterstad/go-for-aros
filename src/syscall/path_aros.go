@@ -111,6 +111,65 @@ func arosPath(p string) (string, error) {
 // exactly 255 bytes locked (F27).
 const maxPathLen = 254
 
+// linkTarget translates Go path p, a soft link's target, to AmigaDOS name
+// by name without cleaning, so that goPath gives it back:
+//
+//	a/../b  a//b    ../x  /x    /x     :x
+//	Work:x  Work:x  ./a/  a     a//b   a/b
+//
+// "." names and repeated or trailing slashes are dropped. "" is ENOENT, as
+// for symlink(2); a ':' outside the volume name is EINVAL, and so is a
+// target that is only "." names (ram-handler hangs reading a link to "",
+// go/HANDOFF.md F28); a result over maxPathLen bytes is ENAMETOOLONG.
+func linkTarget(p string) (string, error) {
+	if p == "" {
+		return "", ENOENT
+	}
+	vol := arosVolumeLen(p)
+	rest := p[vol:]
+	b := make([]byte, 0, len(p)+1)
+	b = append(b, p[:vol]...)
+	if vol == 0 && len(rest) > 0 && rest[0] == '/' {
+		b = append(b, ':')
+	}
+	name := false // b ends with a name
+	for i := 0; i < len(rest); {
+		j := i
+		for j < len(rest) && rest[j] != '/' {
+			j++
+		}
+		e := rest[i:j]
+		i = j + 1
+		switch e {
+		case "", ".":
+		case "..":
+			if name {
+				b = append(b, '/')
+			}
+			b = append(b, '/')
+			name = false
+		default:
+			for k := 0; k < len(e); k++ {
+				if e[k] == ':' || e[k] == 0 {
+					return "", EINVAL
+				}
+			}
+			if name {
+				b = append(b, '/')
+			}
+			b = append(b, e...)
+			name = true
+		}
+	}
+	if len(b) == 0 {
+		return "", EINVAL
+	}
+	if len(b) > maxPathLen {
+		return "", ENAMETOOLONG
+	}
+	return string(b), nil
+}
+
 // linkPath translates a link target as dos keeps it to a Go path
 // (goPath): an empty target is ".", and an absolute one is "Work:/x", the
 // shape os.MkdirTemp gives ("T:/x"), rather than NameFromLock's "Work:x"

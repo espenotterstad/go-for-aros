@@ -658,7 +658,7 @@ func Pipe() (r *File, w *File, err error) {
 	return nil, nil, NewSyscallError("pipe", syscall.ENOSYS)
 }
 
-// Not supported on AROS yet: hard links, making soft links, and owners.
+// Not supported on AROS yet: hard links and owners.
 
 // Link creates newname as a hard link to the oldname file.
 // If there is an error, it will be of type *LinkError.
@@ -669,9 +669,18 @@ func Link(oldname, newname string) error {
 // Symlink creates newname as a symbolic link to oldname.
 // On Windows, a symlink to a non-existent oldname creates a file symlink;
 // if oldname is later created as a directory the symlink will not work.
+// On AROS it is a dos soft link (go/HANDOFF.md D33); on the hosted
+// handler, a host symlink holding the AROS path.
 // If there is an error, it will be of type *LinkError.
 func Symlink(oldname, newname string) error {
-	return &LinkError{"symlink", oldname, newname, syscall.ENOSYS}
+	e := checkTrailingSlash(newname, true)
+	if e == nil {
+		e = syscall.Symlink(oldname, newname)
+	}
+	if e != nil {
+		return &LinkError{"symlink", oldname, newname, e}
+	}
+	return nil
 }
 
 // readlink reads a soft link through dos ReadLink (go/HANDOFF.md D31). A
