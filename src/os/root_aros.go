@@ -16,7 +16,11 @@ import (
 // one component at a time with Lstat and Readlink, as on js
 // (root_js.go, go/HANDOFF.md D31), so a soft link can't lead out of the
 // root. A name or link target with a volume name ("Work:x") is absolute
-// and escapes, as a leading '/' does.
+// and escapes, as a leading '/' does. ".." in the name is lexical, as on
+// Windows: syscall cleans a name before dos sees it (go/HANDOFF.md D15).
+// ".." in a link's target is not: dos follows the target itself, a name
+// at a time, so the walk does too (a link to "s/../f" where s is a link
+// leads where s leads, then up).
 //
 // Due to the lack of openat, checkPathEscapes is subject to TOCTOU races
 // when symlinks change during the resolution process.
@@ -30,30 +34,22 @@ func checkPathEscapesLstat(r *Root, name string) error {
 	return checkPathEscapesInternal(r, name, true)
 }
 
-// splitPathInRootVolume is splitPathInRoot for AROS: a volume name
-// escapes, and ".." is lexical, as on Windows (rootCleanPath): syscall
-// cleans a name before dos sees it (go/HANDOFF.md D15), so the walk cleans
-// prefix, s and suffix together first, and a ".." above the root escapes.
-func splitPathInRootVolume(s string, prefix, suffix []string) ([]string, bool, error) {
-	if filepathlite.VolumeNameLen(s) > 0 {
+// splitNameInRoot splits a name given to a Root into its components: a
+// volume name escapes, and the name is cleaned first, as syscall cleans it,
+// so a ".." above the root escapes.
+func splitNameInRoot(name string) ([]string, bool, error) {
+	if filepathlite.VolumeNameLen(name) > 0 {
 		return nil, false, errPathEscapes
 	}
-	if s == "" || IsPathSeparator(s[0]) {
-		return splitPathInRoot(s, prefix, suffix) // "empty path", errPathEscapes
+	if name == "" || IsPathSeparator(name[0]) {
+		return splitPathInRoot(name, nil, nil) // "empty path", errPathEscapes
 	}
-	endsInSlash := IsPathSeparator(s[len(s)-1])
-	full := s
-	for i := len(prefix) - 1; i >= 0; i-- {
-		full = prefix[i] + "/" + full
-	}
-	for _, p := range suffix {
-		full += "/" + p
-	}
-	full = filepathlite.Clean(full)
-	if full == ".." || stringslite.HasPrefix(full, "../") {
+	endsInSlash := IsPathSeparator(name[len(name)-1])
+	name = filepathlite.Clean(name)
+	if name == ".." || stringslite.HasPrefix(name, "../") {
 		return nil, false, errPathEscapes
 	}
-	parts, _, err := splitPathInRoot(full, nil, nil)
+	parts, _, err := splitPathInRoot(name, nil, nil)
 	return parts, endsInSlash, err
 }
 
@@ -61,7 +57,7 @@ func checkPathEscapesInternal(r *Root, name string, lstat bool) error {
 	if r.root.closed.Load() {
 		return ErrClosed
 	}
-	parts, endsInSlash, err := splitPathInRootVolume(name, nil, nil)
+	parts, endsInSlash, err := splitNameInRoot(name)
 	if err != nil {
 		return err
 	}
@@ -113,7 +109,10 @@ func checkPathEscapesInternal(r *Root, name string, lstat bool) error {
 			if symlinks > rootMaxSymlinks {
 				return errors.New("too many symlinks")
 			}
-			newparts, newEndsInSlash, err := splitPathInRootVolume(link, parts[:i], parts[i+1:])
+			if filepathlite.VolumeNameLen(link) > 0 {
+				return errPathEscapes
+			}
+			newparts, newEndsInSlash, err := splitPathInRoot(link, parts[:i], parts[i+1:])
 			if err != nil {
 				return err
 			}
