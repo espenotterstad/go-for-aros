@@ -44,7 +44,9 @@ func splitNameInRoot(name string) ([]string, bool, error) {
 	if name == "" || IsPathSeparator(name[0]) {
 		return splitPathInRoot(name, nil, nil) // "empty path", errPathEscapes
 	}
-	endsInSlash := IsPathSeparator(name[len(name)-1])
+	// "a/." must name a directory, as "a/" (hasTrailingSlash): the walk
+	// follows a link there, as Lstat will.
+	endsInSlash := IsPathSeparator(name[len(name)-1]) || hasTrailingSlash(name)
 	name = filepathlite.Clean(name)
 	if name == ".." || stringslite.HasPrefix(name, "../") {
 		return nil, false, errPathEscapes
