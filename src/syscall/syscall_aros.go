@@ -560,6 +560,142 @@ func Rename(from, to string) error {
 	return nil
 }
 
+// dosCall6 is dosCall for a function with five arguments (ReadLink); the
+// caller passes dosBase as a5.
+//
+//go:nosplit
+//go:uintptrkeepalive
+func dosCall6(lvo, a0, a1, a2, a3, a4, a5 uintptr) (uintptr, Errno) {
+	r, e := aroscall(*(*uintptr)(unsafe.Pointer(dosBase - 8*lvo)), a0, a1, a2, a3, a4, a5)
+	return r, Errno(e)
+}
+
+// Soft links (go/HANDOFF.md D31, D33). dos ReadLink asks the handler that
+// owns a lock for a link named relative to that lock. readLink asks for
+// the last name only, relative to its parent's lock: ram-handler resolves
+// a link in the middle of the name, the hosted handler doesn't (F26e).
+
+// readLink reads soft link path: its target as dos keeps it, and, given
+// fib, its entry in the parent directory and the parent's full name (a Go
+// path). A name that isn't a soft link gives EINVAL, as readlink(2).
+func readLink(path string, fib *FileInfoBlock) (target, dir string, err error) {
+	p, err := arosPath(path)
+	if err != nil {
+		return "", "", err
+	}
+	d, name := splitDosPath(p)
+	if name == "" {
+		return "", "", EINVAL // the current directory, a parent or a root
+	}
+	dp, err := BytePtrFromString(d)
+	if err != nil {
+		return "", "", err
+	}
+	np, err := BytePtrFromString(name)
+	if err != nil {
+		return "", "", err
+	}
+	lock, e := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(dp)), iptr(_SHARED_LOCK), dosBase, 0, 0)
+	if lock == 0 {
+		return "", "", notFound(path, e)
+	}
+	defer UnLock(Handle(lock))
+	port := *(*uintptr)(unsafe.Pointer(lock + _FileLock_fl_Task))
+	for n := 256; ; n *= 2 {
+		buf := make([]byte, n)
+		r, e := dosCall6(_LVO_ReadLink, port, lock, uintptr(unsafe.Pointer(np)), uintptr(unsafe.Pointer(&buf[0])), uintptr(n), dosBase)
+		switch int32(r) {
+		case -1:
+			if e == ERROR_OBJECT_NOT_FOUND || e == ERROR_DIR_NOT_FOUND {
+				return "", "", notFound(path, e)
+			}
+			// Not a link (ram-handler says ERROR_OBJECT_WRONG_TYPE, the
+			// hosted handler 100), unless the name can't be locked either.
+			pp, _ := BytePtrFromString(p)
+			l, e := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(pp)), iptr(_SHARED_LOCK), dosBase, 0, 0)
+			if l == 0 {
+				return "", "", notFound(path, e)
+			}
+			dosCall(_LVO_UnLock, l, dosBase, 0, 0, 0)
+			return "", "", EINVAL
+		case -2:
+			// The buffer is too small (IoErr ERROR_BUFFER_OVERFLOW on
+			// ram-handler, 0 on the hosted handler).
+			if n >= 1<<16 {
+				return "", "", ENAMETOOLONG
+			}
+			continue
+		}
+		target = cstring(buf[:r])
+		break
+	}
+	if fib == nil {
+		return target, "", nil
+	}
+	if err := Examine(Handle(lock), fib); err != nil {
+		return "", "", err
+	}
+	for {
+		if err := ExNext(Handle(lock), fib); err != nil {
+			if err == ERROR_NO_MORE_ENTRIES {
+				err = ENOENT // removed since ReadLink
+			}
+			return "", "", err
+		}
+		if equalFoldASCII(fib.Name(), name) {
+			break
+		}
+	}
+	dir, err = NameFromLock(Handle(lock))
+	if err != nil {
+		return "", "", err
+	}
+	return target, dir, nil
+}
+
+// equalFoldASCII reports whether a and b are the same dos name: dos ignores
+// the case of ASCII letters.
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+// Readlink returns the target of soft link path as a Go path (linkPath).
+func Readlink(path string) (string, error) {
+	t, _, err := readLink(path, nil)
+	if err != nil {
+		return "", err
+	}
+	return linkPath(t)
+}
+
+// LstatLink fills fib for soft link path from its entry in the parent
+// directory (a link can't be locked: dos follows it) and returns the
+// link's target, as Readlink, and the parent's full name. A name that
+// isn't a soft link gives EINVAL.
+func LstatLink(path string, fib *FileInfoBlock) (target, dir string, err error) {
+	t, dir, err := readLink(path, fib)
+	if err != nil {
+		return "", "", err
+	}
+	t, err = linkPath(t)
+	return t, dir, err
+}
+
 // SetProtection sets path's dos protection bits (RWED active-low, the
 // rest active-high).
 func SetProtection(path string, mask uint32) error {

@@ -33,6 +33,7 @@ const (
 	_LVO_NameFromFH     = 68  // dos
 	_LVO_GetProgramDir  = 100 // dos
 	_LVO_GetProgramName = 96  // dos
+	_LVO_ReadLink       = 73  // dos
 )
 
 // dos error codes (IoErr), as Errno.
@@ -99,6 +100,7 @@ const (
 	_TF_ETASK                       = 8
 	_Task_tc_ETask                  = 56
 	_ETask_et_UniqueID              = 56
+	_FileLock_fl_Task               = 24
 	FIBF_DELETE                     = 1
 	FIBF_EXECUTE                    = 2
 	FIBF_WRITE                      = 4

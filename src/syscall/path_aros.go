@@ -111,6 +111,45 @@ func arosPath(p string) (string, error) {
 // exactly 255 bytes locked (F27).
 const maxPathLen = 254
 
+// linkPath translates a link target as dos keeps it to a Go path
+// (goPath): an empty target is ".", and an absolute one is "Work:/x", the
+// shape os.MkdirTemp gives ("T:/x"), rather than NameFromLock's "Work:x"
+// (go/HANDOFF.md A26).
+func linkPath(t string) (string, error) {
+	if t == "" {
+		return ".", nil
+	}
+	t, err := goPath(t)
+	if err != nil {
+		return "", err
+	}
+	if v := arosVolumeLen(t); v > 0 && v < len(t) && t[v] != '/' {
+		t = t[:v] + "/" + t[v:]
+	}
+	return t, nil
+}
+
+// splitDosPath splits AmigaDOS path p into its parent directory and its
+// last name:
+//
+//	a/b     a       b    a//b  a//   b
+//	Work:b  Work:   b    /b    /     b
+//	b       ""      b    a/    a/    ""
+//
+// A '/' after a name separates; one at the start, after a ':' or after
+// another '/' is a parent of its own and stays.
+func splitDosPath(p string) (dir, name string) {
+	i := len(p)
+	for i > 0 && p[i-1] != '/' && p[i-1] != ':' {
+		i--
+	}
+	dir, name = p[:i], p[i:]
+	if n := len(dir); n >= 2 && dir[n-1] == '/' && dir[n-2] != '/' && dir[n-2] != ':' && name != "" {
+		dir = dir[:n-1]
+	}
+	return dir, name
+}
+
 // goPath translates AmigaDOS path p, as dos returns it (NameFromLock,
 // ReadLink, GetProgramName), to a Go path: a '/' where a name would start
 // is the parent ("/x" is "../x", "a//b" is "a/../b", "Work:a//b" is
