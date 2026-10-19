@@ -117,14 +117,39 @@ func statNolog(name string) (FileInfo, error) {
 	return fs, nil
 }
 
-// lstatNolog implements Lstat for AROS: as Stat, since os doesn't read
-// soft links yet (only ReadDir reports one).
+// lstatNolog implements Lstat for AROS (go/HANDOFF.md D31): a soft link is
+// described by its entry in the parent directory, with its target's length
+// as its size, as on Unix; anything else as Stat. A trailing slash follows
+// the link.
 func lstatNolog(name string) (FileInfo, error) {
+	if !isNIL(name) && !hasTrailingSlash(name) {
+		var fib syscall.FileInfoBlock
+		target, dir, err := syscall.LstatLink(name, &fib)
+		if err == nil {
+			fs := fileStatFromFIB(&fib, joinDosName(dir, fib.Name()))
+			fs.mode = fs.mode&ModePerm | ModeSymlink
+			fs.size = int64(len(target))
+			fs.name = basename(name, fs.name)
+			return fs, nil
+		}
+		if err != syscall.EINVAL {
+			return nil, &PathError{Op: "lstat", Path: name, Err: err}
+		}
+	}
 	fi, err := statNolog(name)
 	if pe, ok := err.(*PathError); ok {
 		pe.Op = "lstat"
 	}
 	return fi, err
+}
+
+// joinDosName joins a directory's full name and a name in it: "Work:" and
+// "x" give "Work:x", "Work:a" and "x" "Work:a/x".
+func joinDosName(dir, name string) string {
+	if dir == "" || dir[len(dir)-1] == ':' || dir[len(dir)-1] == '/' {
+		return dir + name
+	}
+	return dir + "/" + name
 }
 
 // For testing.

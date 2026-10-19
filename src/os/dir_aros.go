@@ -69,6 +69,13 @@ func (file *File) readdir(n int, mode readdirMode) (names []string, dirents []Di
 			names = append(names, name)
 		} else {
 			f := fileStatFromFIB(&d.fib, d.path+name)
+			if f.mode&ModeSymlink != 0 {
+				// As Lstat: a link's size is its target's length (the
+				// entry says 0 on ram-handler).
+				if t, err := syscall.Readlink(f.path); err == nil {
+					f.size = int64(len(t))
+				}
+			}
 			if mode == readdirDirEntry {
 				dirents = append(dirents, dirEntry{f})
 			} else {

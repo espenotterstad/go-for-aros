@@ -654,7 +654,7 @@ func Pipe() (r *File, w *File, err error) {
 	return nil, nil, NewSyscallError("pipe", syscall.ENOSYS)
 }
 
-// Not supported on AROS yet: hard and soft links, and owners.
+// Not supported on AROS yet: hard links, making soft links, and owners.
 
 // Link creates newname as a hard link to the oldname file.
 // If there is an error, it will be of type *LinkError.
@@ -670,8 +670,27 @@ func Symlink(oldname, newname string) error {
 	return &LinkError{"symlink", oldname, newname, syscall.ENOSYS}
 }
 
+// readlink reads a soft link through dos ReadLink (go/HANDOFF.md D31). A
+// trailing slash follows the link, as on Unix: what it names is no link.
 func readlink(name string) (string, error) {
-	return "", &PathError{Op: "readlink", Path: name, Err: syscall.ENOSYS}
+	var err error
+	if hasTrailingSlash(name) {
+		var fi FileInfo
+		if fi, err = Stat(name); err == nil {
+			err = syscall.EINVAL
+			if !fi.IsDir() {
+				err = syscall.ENOTDIR
+			}
+		} else if pe, ok := err.(*PathError); ok {
+			err = pe.Err
+		}
+		return "", &PathError{Op: "readlink", Path: name, Err: err}
+	}
+	t, err := syscall.Readlink(name)
+	if err != nil {
+		return "", &PathError{Op: "readlink", Path: name, Err: err}
+	}
+	return t, nil
 }
 
 // Chown changes the numeric uid and gid of the named file.
