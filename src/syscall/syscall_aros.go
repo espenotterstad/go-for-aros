@@ -130,7 +130,11 @@ func isAppend(fd Handle) bool {
 // recreate an existing one. A handler without SetFileSize (NIL:) ignores
 // O_TRUNC.
 func Open(path string, mode int, perm uint32) (fd Handle, err error) {
-	p, err := dosPath(path)
+	ps, err := arosPath(path)
+	if err != nil {
+		return 0, err
+	}
+	p, err := BytePtrFromString(ps)
 	if err != nil {
 		return 0, err
 	}
@@ -142,6 +146,8 @@ func Open(path string, mode int, perm uint32) (fd Handle, err error) {
 			if mode&O_EXCL != 0 {
 				return 0, EEXIST
 			}
+		} else if _, _, err := readLink(path, nil); err == nil && mode&O_EXCL != 0 {
+			return 0, EEXIST // a dangling soft link, as Unix
 		} else {
 			create = true
 		}
@@ -163,7 +169,7 @@ func Open(path string, mode int, perm uint32) (fd Handle, err error) {
 		pendingProt[fd] = permProt(perm)
 		appendLock.Unlock()
 	} else if create {
-		dosCall(_LVO_SetProtection, uintptr(unsafe.Pointer(p)), uintptr(permProt(perm)), dosBase, 0, 0)
+		setProtection(ps, permProt(perm))
 	}
 	if mode&O_TRUNC != 0 {
 		r, e := dosCall(_LVO_SetFileSize, uintptr(fd), 0, iptr(_OFFSET_BEGINNING), dosBase, 0)
@@ -482,16 +488,20 @@ func ExamineFH(fd Handle, fib *FileInfoBlock) error {
 
 // Mkdir creates directory path with perm (permProt), as Open does.
 func Mkdir(path string, perm uint32) error {
-	p, err := dosPath(path)
+	p, err := arosPath(path)
 	if err != nil {
 		return err
 	}
-	r, e := dosCall(_LVO_CreateDir, uintptr(unsafe.Pointer(p)), dosBase, 0, 0, 0)
-	if r == 0 {
+	if e := dosName(p, false, func(n *byte) (bool, Errno) {
+		r, e := dosCall(_LVO_CreateDir, uintptr(unsafe.Pointer(n)), dosBase, 0, 0, 0)
+		if r != 0 {
+			UnLock(Handle(r)) // CreateDir returns an exclusive lock on the new directory
+		}
+		return r != 0, e
+	}); e != 0 {
 		return notFound(path, e)
 	}
-	UnLock(Handle(r)) // CreateDir returns an exclusive lock on the new directory
-	dosCall(_LVO_SetProtection, uintptr(unsafe.Pointer(p)), uintptr(permProt(perm)), dosBase, 0, 0)
+	setProtection(p, permProt(perm))
 	return nil
 }
 
@@ -500,18 +510,80 @@ func Mkdir(path string, perm uint32) error {
 // refuses rmdir(".") and rename(".", x) (go/HANDOFF.md F22e); so is a path
 // whose last name is "." or "..", which arosPath would clean to the
 // directory itself ("a/." to "a").
-func dosObject(path string) (*byte, error) {
+func dosObject(path string) (string, error) {
 	if e := lastName(path); e == "." || e == ".." {
-		return nil, EINVAL
+		return "", EINVAL
 	}
 	p, err := arosPath(path)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if p == "" {
-		return nil, EINVAL
+		return "", EINVAL
 	}
-	return BytePtrFromString(p)
+	return p, nil
+}
+
+// dos resolves a soft link in a name only in Lock and Open (rom/dos/lock.c,
+// open.c). The other calls get ERROR_IS_SOFT_LINK from ram-handler when a
+// name goes through a soft link, and Rename, SetProtection and SetFileDate
+// also when a soft link is the last name (its GetObject and GetHardObject,
+// rom/filesys/ram/filesystem.c). The hosted handler never says it: the
+// host follows its symlinks itself (go/HANDOFF.md F28).
+
+// dosName calls fn with AmigaDOS name p and, if it fails with
+// ERROR_IS_SOFT_LINK, once more with p's soft links resolved (linkFree):
+// all of them if follow, else all but the last name's.
+func dosName(p string, follow bool, fn func(name *byte) (bool, Errno)) Errno {
+	b, err := BytePtrFromString(p)
+	if err != nil {
+		return EINVAL
+	}
+	ok, e := fn(b)
+	if ok {
+		return 0
+	}
+	if e == ERROR_IS_SOFT_LINK {
+		if q, found := linkFree(p, follow); found {
+			if b, err = BytePtrFromString(q); err == nil {
+				if ok, e = fn(b); ok {
+					return 0
+				}
+			}
+		}
+	}
+	return e
+}
+
+// linkFree returns AmigaDOS name p with its soft links resolved by Lock and
+// NameFromLock: the whole name if follow, else its parent directory with
+// the last name added. It fails if a Lock does or the result is over
+// maxPathLen bytes.
+func linkFree(p string, follow bool) (string, bool) {
+	dir, name := p, ""
+	if !follow {
+		if dir, name = splitDosPath(p); name == "" {
+			return "", false
+		}
+	}
+	b, err := BytePtrFromString(dir)
+	if err != nil {
+		return "", false
+	}
+	l, _ := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(b)), iptr(_SHARED_LOCK), dosBase, 0, 0)
+	if l == 0 {
+		return "", false
+	}
+	full, err := nameFromDos(_LVO_NameFromLock, l)
+	dosCall(_LVO_UnLock, l, dosBase, 0, 0, 0)
+	if err != nil || full == "" {
+		return "", false
+	}
+	if c := full[len(full)-1]; name != "" && c != ':' && c != '/' {
+		full += "/"
+	}
+	full += name
+	return full, len(full) <= maxPathLen
 }
 
 // lastName returns path's last name: "c" for "a/b/c" and "a/b/c/".
@@ -534,7 +606,10 @@ func Remove(path string) error {
 	if err != nil {
 		return err
 	}
-	if r, e := dosCall(_LVO_DeleteFile, uintptr(unsafe.Pointer(p)), dosBase, 0, 0, 0); int16(r) == 0 {
+	if e := dosName(p, false, func(n *byte) (bool, Errno) {
+		r, e := dosCall(_LVO_DeleteFile, uintptr(unsafe.Pointer(n)), dosBase, 0, 0, 0)
+		return int16(r) != 0, e
+	}); e != 0 {
 		return notFound(path, e)
 	}
 	return nil
@@ -551,7 +626,29 @@ func Rename(from, to string) error {
 	if err != nil {
 		return err
 	}
-	if r, e := dosCall(_LVO_Rename, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(q)), dosBase, 0, 0); int32(r) == 0 {
+	rename := func(p, q string) Errno {
+		pb, err := BytePtrFromString(p)
+		if err != nil {
+			return EINVAL
+		}
+		qb, err := BytePtrFromString(q)
+		if err != nil {
+			return EINVAL
+		}
+		if r, e := dosCall(_LVO_Rename, uintptr(unsafe.Pointer(pb)), uintptr(unsafe.Pointer(qb)), dosBase, 0, 0); int32(r) == 0 {
+			return e
+		}
+		return 0
+	}
+	e := rename(p, q)
+	if e == ERROR_IS_SOFT_LINK { // see dosName
+		p1, ok1 := linkFree(p, false)
+		q1, ok2 := linkFree(q, false)
+		if ok1 && ok2 {
+			e = rename(p1, q1)
+		}
+	}
+	if e != 0 {
 		if e = notFound(from, e); e != ENOTDIR {
 			e = notFound(to, e)
 		}
@@ -713,7 +810,10 @@ func Symlink(oldpath, newpath string) error {
 	if err != nil {
 		return err
 	}
-	if r, e := dosCall(_LVO_MakeLink, uintptr(unsafe.Pointer(q)), uintptr(unsafe.Pointer(tp)), _LINK_SOFT, dosBase, 0); int32(r) == 0 {
+	if e := dosName(q, false, func(n *byte) (bool, Errno) {
+		r, e := dosCall(_LVO_MakeLink, uintptr(unsafe.Pointer(n)), uintptr(unsafe.Pointer(tp)), _LINK_SOFT, dosBase, 0)
+		return int32(r) != 0, e
+	}); e != 0 {
 		if e == ERROR_IS_SOFT_LINK {
 			return ERROR_OBJECT_EXISTS // newpath is a soft link
 		}
@@ -725,14 +825,23 @@ func Symlink(oldpath, newpath string) error {
 // SetProtection sets path's dos protection bits (RWED active-low, the
 // rest active-high).
 func SetProtection(path string, mask uint32) error {
-	p, err := dosPath(path)
+	p, err := arosPath(path)
 	if err != nil {
 		return err
 	}
-	if r, e := dosCall(_LVO_SetProtection, uintptr(unsafe.Pointer(p)), uintptr(mask), dosBase, 0, 0); int32(r) == 0 {
+	if e := setProtection(p, mask); e != 0 {
 		return e
 	}
 	return nil
+}
+
+// setProtection sets the protection of AmigaDOS name p, following a soft
+// link.
+func setProtection(p string, mask uint32) Errno {
+	return dosName(p, true, func(n *byte) (bool, Errno) {
+		r, e := dosCall(_LVO_SetProtection, uintptr(unsafe.Pointer(n)), uintptr(mask), dosBase, 0, 0)
+		return int32(r) != 0, e
+	})
 }
 
 // Unix permission bits and dos protection bits. The owner's RWE bits are
@@ -810,11 +919,14 @@ func Chmod(path string, perm uint32) error {
 
 // SetFileDate sets path's date.
 func SetFileDate(path string, ds *DateStamp) error {
-	p, err := dosPath(path)
+	p, err := arosPath(path)
 	if err != nil {
 		return err
 	}
-	if r, e := dosCall(_LVO_SetFileDate, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(ds)), dosBase, 0, 0); int16(r) == 0 {
+	if e := dosName(p, true, func(n *byte) (bool, Errno) {
+		r, e := dosCall(_LVO_SetFileDate, uintptr(unsafe.Pointer(n)), uintptr(unsafe.Pointer(ds)), dosBase, 0, 0)
+		return int16(r) != 0, e
+	}); e != 0 {
 		return e
 	}
 	return nil
@@ -833,9 +945,19 @@ func NameFromFH(fd Handle) (string, error) {
 	return nameFrom(_LVO_NameFromFH, uintptr(fd))
 }
 
-// nameFrom calls NameFromLock or NameFromFH with a buffer that grows until
-// the name fits.
+// nameFrom calls NameFromLock or NameFromFH and returns the name as a Go
+// path.
 func nameFrom(lvo, arg uintptr) (string, error) {
+	p, err := nameFromDos(lvo, arg)
+	if err != nil {
+		return "", err
+	}
+	return goPath(p)
+}
+
+// nameFromDos calls NameFromLock or NameFromFH with a buffer that grows
+// until the name fits, and returns the name as dos gives it.
+func nameFromDos(lvo, arg uintptr) (string, error) {
 	// A name dos takes is at most 255 bytes (maxPathLen), but the full name
 	// can be longer ("RAM:" is "RAM Disk:"). Start big: a NameFromLock
 	// that runs out of buffer keeps a parent locked, and its UnLock clears
@@ -845,7 +967,7 @@ func nameFrom(lvo, arg uintptr) (string, error) {
 		buf := make([]byte, n)
 		r, e := dosCall(lvo, arg, uintptr(unsafe.Pointer(&buf[0])), uintptr(n), dosBase, 0)
 		if int16(r) != 0 {
-			return goPath(cstring(buf))
+			return cstring(buf), nil
 		}
 		if e != ERROR_LINE_TOO_LONG && e != 0 || n >= 1<<16 {
 			return "", e

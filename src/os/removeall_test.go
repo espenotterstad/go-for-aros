@@ -494,6 +494,9 @@ func TestRemoveAllTrailingSlash(t *testing.T) {
 
 func TestRemoveAllSymlinkRemovalFailure(t *testing.T) {
 	testRequiresPermissions(t)
+	if runtime.GOOS == "aros" {
+		t.Skip("skipping on aros: a directory's protection doesn't stop deleting its entries")
+	}
 	dir := makefs(t, []string{
 		"parent/",
 		"parent/link => target",
