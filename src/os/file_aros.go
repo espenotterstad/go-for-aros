@@ -91,10 +91,14 @@ func syscallMode(i FileMode) (o uint32) {
 	return uint32(i.Perm())
 }
 
-// hasTrailingSlash reports whether name ends in a slash that dos would
-// drop: "a/", not "/" or "Work:/".
+// hasTrailingSlash reports whether name ends in a slash or a "." name
+// that dos would drop: "a/" and "a/.", not "/" or "Work:/". Either must
+// name a directory, as on Unix.
 func hasTrailingSlash(name string) bool {
 	n := len(name)
+	if n > 2 && name[n-1] == '.' && name[n-2] == '/' {
+		return true
+	}
 	return n > 1 && name[n-1] == '/' && name[n-2] != ':'
 }
 

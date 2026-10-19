@@ -297,8 +297,9 @@ var rootTestCases = []rootTest{{
 	},
 	open: "a/../target",
 	target: func() string {
-		if runtime.GOOS == "windows" {
+		if runtime.GOOS == "windows" || runtime.GOOS == "aros" {
 			// On Windows, the path is cleaned before symlink resolution.
+			// On AROS too (go/HANDOFF.md D15).
 			return "target"
 		}
 		return "b/target"
