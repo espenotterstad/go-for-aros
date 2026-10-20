@@ -670,10 +670,11 @@ func Link(oldname, newname string) error {
 // On Windows, a symlink to a non-existent oldname creates a file symlink;
 // if oldname is later created as a directory the symlink will not work.
 // On AROS it is a dos soft link (go/HANDOFF.md D33); on the hosted
-// handler, a host symlink holding the AROS path, which the host follows
+// handler, a host symlink holding the AROS path. There dos resolves a
+// link as the last name, but the host follows one in the middle of a path
 // as a host path: a target with ".." ("/x" to dos) leads to the host
-// root's x there, and a Root on the hosted handler doesn't see it
-// (AROS bug B33).
+// root's x, and a Root on the hosted handler doesn't see it (AROS bug
+// B33).
 // If there is an error, it will be of type *LinkError.
 func Symlink(oldname, newname string) error {
 	e := checkTrailingSlash(newname, true)
