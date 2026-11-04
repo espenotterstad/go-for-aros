@@ -35,6 +35,7 @@ const (
 	_LVO_GetProgramName = 96  // dos
 	_LVO_ReadLink       = 73  // dos
 	_LVO_MakeLink       = 74  // dos
+	_LVO_SameLock       = 70  // dos
 )
 
 // dos error codes (IoErr), as Errno.
@@ -72,6 +73,7 @@ const (
 	_MODE_READWRITE                 = 1004
 	_SHARED_LOCK                    = -2
 	_EXCLUSIVE_LOCK                 = -1
+	_LOCK_SAME                      = 0
 	_OFFSET_BEGINNING               = -1
 	_OFFSET_CURRENT                 = 0
 	_OFFSET_END                     = 1

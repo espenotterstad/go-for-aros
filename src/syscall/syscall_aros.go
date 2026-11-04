@@ -526,15 +526,25 @@ func dosObject(path string) (string, error) {
 
 // dos resolves a soft link in a name only in Lock and Open (rom/dos/lock.c,
 // open.c). The other calls get ERROR_IS_SOFT_LINK from ram-handler when a
-// name goes through a soft link, and Rename, SetProtection and SetFileDate
-// also when a soft link is the last name (its GetObject and GetHardObject,
-// rom/filesys/ram/filesystem.c). The hosted handler never says it: the
-// host follows its symlinks itself (go/HANDOFF.md F28).
+// name goes through a soft link (its GetObject,
+// rom/filesys/ram/filesystem.c), and act on the link itself when it is the
+// last name: Rename renames it, SetProtection and SetFileDate change it. The
+// hosted handler never says it: the host follows its symlinks itself
+// (go/HANDOFF.md F28, F29).
 
 // dosName calls fn with AmigaDOS name p and, if it fails with
 // ERROR_IS_SOFT_LINK, once more with p's soft links resolved (linkFree):
-// all of them if follow, else all but the last name's.
+// all of them if follow, else all but the last name's. If follow, p is
+// resolved first (followName), so a soft link as the last name is
+// followed, as Unix chmod and utimes do.
 func dosName(p string, follow bool, fn func(name *byte) (bool, Errno)) Errno {
+	if follow {
+		q, e := followName(p)
+		if e != 0 {
+			return e
+		}
+		p = q
+	}
 	b, err := BytePtrFromString(p)
 	if err != nil {
 		return EINVAL
@@ -553,6 +563,45 @@ func dosName(p string, follow bool, fn func(name *byte) (bool, Errno)) Errno {
 		}
 	}
 	return e
+}
+
+// followName returns AmigaDOS name p with its soft links resolved by Lock
+// and NameFromLock, when SameLock confirms the resolved name locks the same
+// object; otherwise p. The hosted handler's NameFromLock gives a wrong name
+// for a lock taken through a host symlink in the middle of the name
+// ("f:" for "a/link/f", go/HANDOFF.md F29, B25), and its host follows p's
+// symlinks itself. A name that can't be locked, a dangling soft link
+// included, gives Lock's error.
+func followName(p string) (string, Errno) {
+	b, err := BytePtrFromString(p)
+	if err != nil {
+		return "", EINVAL
+	}
+	l, e := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(b)), iptr(_SHARED_LOCK), dosBase, 0, 0)
+	if l == 0 {
+		if e == 0 {
+			e = ERROR_OBJECT_NOT_FOUND
+		}
+		return "", e
+	}
+	defer UnLock(Handle(l))
+	q, err := nameFromDos(_LVO_NameFromLock, l)
+	if err != nil || q == "" || q == p || len(q) > maxPathLen {
+		return p, 0
+	}
+	if b, err = BytePtrFromString(q); err != nil {
+		return p, 0
+	}
+	l2, _ := dosCall(_LVO_Lock, uintptr(unsafe.Pointer(b)), iptr(_SHARED_LOCK), dosBase, 0, 0)
+	if l2 == 0 {
+		return p, 0
+	}
+	r, _ := dosCall(_LVO_SameLock, l, l2, dosBase, 0, 0)
+	dosCall(_LVO_UnLock, l2, dosBase, 0, 0, 0)
+	if int32(r) != _LOCK_SAME {
+		return p, 0
+	}
+	return q, 0
 }
 
 // linkFree returns AmigaDOS name p with its soft links resolved by Lock and
