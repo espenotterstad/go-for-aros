@@ -928,9 +928,6 @@ func testRootMoveFrom(t *testing.T, rename bool) {
 				op = "Link"
 				err = root.Link(test.open, dstPath)
 			}
-			if rename && arosRenamesNoLink(err) {
-				t.Skip(arosRenamesNoLinkReason)
-			}
 			if errEndsTest(t, err, wantError, "root.%v(%q, %q)", op, test.open, dstPath) {
 				return
 			}
@@ -2216,14 +2213,6 @@ func (test *rootMultiTest) wantError(t *testing.T, got, want error) {
 	t.Fatalf("%v:\ngot error:  %v\nwant error: %v", test.op, got, want)
 }
 
-// arosRenamesNoLink reports whether err is ram-handler refusing to rename
-// a soft link ("object is soft link", go/HANDOFF.md F28).
-func arosRenamesNoLink(err error) bool {
-	return runtime.GOOS == "aros" && err != nil && strings.Contains(err.Error(), "object is soft link")
-}
-
-const arosRenamesNoLinkReason = "skipping on aros: ram-handler can't rename a soft link"
-
 // arosSlashLinkToNonDir reports whether desc is a soft link whose target
 // ends in a slash but names no directory: Unix refuses to follow it, AROS
 // follows it, as dos keeps no trailing slash in a link (go/HANDOFF.md A27).
@@ -3213,9 +3202,6 @@ func TestRootMultiRename(t *testing.T) {
 
 		test.setOp("Rename(%q, %q)", test.sourcePath, test.targetPath)
 		gotErr := rename(test.sourcePath, test.targetPath)
-		if arosRenamesNoLink(gotErr) {
-			t.Skip(arosRenamesNoLinkReason)
-		}
 
 		if runtime.GOOS == "windows" &&
 			(test.source.finalKind() != test.target.finalKind() || test.source.kind == testFileSymlink || test.target.kind == testFileSymlink) {
