@@ -6,7 +6,9 @@ package time_test
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	. "time"
@@ -155,9 +157,11 @@ func TestLongAdjustTimers(t *testing.T) {
 		t.Skipf("skipping on %s - too slow", runtime.GOOS)
 	}
 	if runtime.GOOS == "aros" {
-		// 5000 goroutines at aros's 16 KB minimum stack need 80 MB, above
-		// the default 64 MB heap (GOAROSHEAP).
-		t.Skip("skipping on aros: the goroutines' stacks don't fit the default heap")
+		// 5000 goroutines at aros's 16 KB minimum stack need 80 MB of the
+		// heap, which GOAROSHEAP sets (megabytes; 64 by default).
+		if mb, _ := strconv.Atoi(os.Getenv("GOAROSHEAP")); mb < 96 {
+			t.Skip("skipping on aros: the goroutines' stacks need GOAROSHEAP=96 or more")
+		}
 	}
 	if testing.Short() && runtime.NumCPU() < 2 {
 		t.Skipf("skipping in short mode, insufficient CPUs")
