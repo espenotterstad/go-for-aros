@@ -2735,12 +2735,21 @@ func TestReadAtEOF(t *testing.T) {
 }
 
 func TestLongPath(t *testing.T) {
-	if runtime.GOOS == "aros" {
-		t.Skip("skipping on aros: paths are at most 254 bytes (dos takes 255)")
-	}
 	t.Parallel()
 
 	tmpdir := t.TempDir()
+	if runtime.GOOS == "aros" {
+		// ram-handler (T:) refuses a whole name over 255 bytes, the most a
+		// BSTR holds, as "object name invalid"; the hosted handler (SYS:)
+		// takes long paths (a 256-byte single name fails there for another
+		// reason). Every subtest makes names longer than 255 bytes. Mkdir
+		// passes dos the whole name, so nothing is left where it is refused.
+		long := tmpdir + "/" + strings.Repeat("x", 256)
+		if err := Mkdir(long, 0755); err != nil && strings.Contains(err.Error(), "object name invalid") {
+			t.Skip("skipping on aros: this volume takes no name over 255 bytes")
+		}
+		Remove(long)
+	}
 
 	// Test the boundary of 247 and fewer bytes (normal) and 248 and more bytes (adjusted).
 	sizes := []int{247, 248, 249, 400}

@@ -35,8 +35,8 @@ func arosVolumeLen(path string) int {
 // It cleans first. A ".." that would climb above a volume ("Work:..") and a
 // ':' outside the volume name are EINVAL; "" is ENOENT (dos would read it
 // as the current directory). A result of "*" is EINVAL: dos Open reads that
-// name as the console (rom/dos/open.c). One over maxPathLen bytes is
-// ENAMETOOLONG.
+// name as the console (rom/dos/open.c). Its length is for dos and the
+// handler to judge (go/HANDOFF.md D39).
 func arosPath(p string) (string, error) {
 	if p == "" {
 		return "", ENOENT
@@ -99,17 +99,8 @@ func arosPath(p string) (string, error) {
 	if string(b) == "*" {
 		return "", EINVAL
 	}
-	if len(b) > maxPathLen {
-		return "", ENAMETOOLONG
-	}
 	return string(b), nil
 }
-
-// maxPathLen is the longest dos path: dos passes a path to its handler with
-// an 8-bit length, so a longer one names another, shorter path
-// (go/HANDOFF.md F26d), and ram-handler leaves an object it creates at
-// exactly 255 bytes locked (F27).
-const maxPathLen = 254
 
 // linkTarget translates Go path p, a soft link's target, to AmigaDOS name
 // by name without cleaning, so that goPath gives it back:
@@ -120,7 +111,7 @@ const maxPathLen = 254
 // "." names and repeated or trailing slashes are dropped. "" is ENOENT, as
 // for symlink(2); a ':' outside the volume name is EINVAL, and so is a
 // target that is only "." names (ram-handler hangs reading a link to "",
-// go/HANDOFF.md F28); a result over maxPathLen bytes is ENAMETOOLONG.
+// go/HANDOFF.md F28).
 func linkTarget(p string) (string, error) {
 	if p == "" {
 		return "", ENOENT
@@ -163,9 +154,6 @@ func linkTarget(p string) (string, error) {
 	}
 	if len(b) == 0 {
 		return "", EINVAL
-	}
-	if len(b) > maxPathLen {
-		return "", ENAMETOOLONG
 	}
 	return string(b), nil
 }

@@ -536,8 +536,12 @@ func dosObject(path string) (string, error) {
 // ERROR_IS_SOFT_LINK, once more with p's soft links resolved (linkFree):
 // all of them if follow, else all but the last name's. If follow, p is
 // resolved first (followName), so a soft link as the last name is
-// followed, as Unix chmod and utimes do.
+// followed, as Unix chmod and utimes do; NameFromLock names the volume
+// ("RAM Disk:T/x" for "T:/x"), so when ram-handler refuses the resolved
+// name as too long (ERROR_INVALID_COMPONENT_NAME, over 255 bytes,
+// go/HANDOFF.md D39) fn runs once more on p as given.
 func dosName(p string, follow bool, fn func(name *byte) (bool, Errno)) Errno {
+	given := p
 	if follow {
 		q, e := followName(p)
 		if e != 0 {
@@ -552,6 +556,14 @@ func dosName(p string, follow bool, fn func(name *byte) (bool, Errno)) Errno {
 	ok, e := fn(b)
 	if ok {
 		return 0
+	}
+	if e == ERROR_INVALID_COMPONENT_NAME && p != given {
+		if b, err = BytePtrFromString(given); err == nil {
+			if ok, e = fn(b); ok {
+				return 0
+			}
+		}
+		p = given
 	}
 	if e == ERROR_IS_SOFT_LINK {
 		if q, found := linkFree(p, follow); found {
@@ -586,7 +598,7 @@ func followName(p string) (string, Errno) {
 	}
 	defer UnLock(Handle(l))
 	q, err := nameFromDos(_LVO_NameFromLock, l)
-	if err != nil || q == "" || q == p || len(q) > maxPathLen {
+	if err != nil || q == "" || q == p {
 		return p, 0
 	}
 	if b, err = BytePtrFromString(q); err != nil {
@@ -606,8 +618,7 @@ func followName(p string) (string, Errno) {
 
 // linkFree returns AmigaDOS name p with its soft links resolved by Lock and
 // NameFromLock: the whole name if follow, else its parent directory with
-// the last name added. It fails if a Lock does or the result is over
-// maxPathLen bytes.
+// the last name added. It fails if a Lock does.
 func linkFree(p string, follow bool) (string, bool) {
 	dir, name := p, ""
 	if !follow {
@@ -632,7 +643,7 @@ func linkFree(p string, follow bool) (string, bool) {
 		full += "/"
 	}
 	full += name
-	return full, len(full) <= maxPathLen
+	return full, true
 }
 
 // lastName returns path's last name: "c" for "a/b/c" and "a/b/c/".
@@ -1003,18 +1014,13 @@ func nameFrom(lvo, arg uintptr) (string, error) {
 // nameFromDos calls NameFromLock or NameFromFH with a buffer that grows
 // until the name fits, and returns the name as dos gives it.
 func nameFromDos(lvo, arg uintptr) (string, error) {
-	// A name dos takes is at most 255 bytes (maxPathLen), but the full name
-	// can be longer ("RAM:" is "RAM Disk:"). Start big: a NameFromLock
-	// that runs out of buffer keeps a parent locked, and its UnLock clears
-	// the ERROR_LINE_TOO_LONG it set (rom/dos/namefrom.c, go/HANDOFF.md
-	// F27), so 0 also means too long.
-	for n := 1024; ; n *= 2 {
+	for n := 256; ; n *= 2 {
 		buf := make([]byte, n)
 		r, e := dosCall(lvo, arg, uintptr(unsafe.Pointer(&buf[0])), uintptr(n), dosBase, 0)
 		if int16(r) != 0 {
 			return cstring(buf), nil
 		}
-		if e != ERROR_LINE_TOO_LONG && e != 0 || n >= 1<<16 {
+		if e != ERROR_LINE_TOO_LONG || n >= 1<<16 {
 			return "", e
 		}
 	}
