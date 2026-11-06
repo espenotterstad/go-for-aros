@@ -32,8 +32,7 @@ type file struct {
 	name       string
 	dirinfo    atomic.Pointer[dirInfo] // nil unless directory being read
 	appendMode bool                    // whether file is opened for appending
-	rdonly     bool                    // opened O_RDONLY: Write gives EBADF (dos opens every file read-write)
-	wronly     bool                    // opened O_WRONLY: Read gives EBADF
+	rdonly     bool                    // opened O_RDONLY: Truncate gives EINVAL (Read and Write go to dos, go/HANDOFF.md D41)
 	farPos     int64                   // a position past the end that dos refused (seek), else 0
 }
 
@@ -150,7 +149,6 @@ func openFileNolog(name string, flag int, perm FileMode) (*File, error) {
 	f := newFileFromNewFile(uintptr(fd), name)
 	f.appendMode = flag&O_APPEND != 0
 	f.rdonly = flag&(O_WRONLY|O_RDWR) == 0
-	f.wronly = flag&O_WRONLY != 0
 	return f, nil
 }
 
@@ -359,9 +357,6 @@ func (f *File) read(b []byte) (n int, err error) {
 	if f.isDir {
 		return 0, syscall.EISDIR
 	}
-	if f.wronly {
-		return 0, syscall.EBADF
-	}
 	if f.pastEnd() {
 		return 0, io.EOF
 	}
@@ -388,9 +383,6 @@ func (f *File) pread(b []byte, off int64) (n int, err error) {
 	defer f.writeUnlock()
 	if f.isDir {
 		return 0, syscall.EISDIR
-	}
-	if f.wronly {
-		return 0, syscall.EBADF
 	}
 	err = f.at(off, func() error {
 		n, err = syscall.Read(f.sysfd, b)
@@ -428,9 +420,6 @@ func (f *File) write(b []byte) (n int, err error) {
 	if f.isDir {
 		return 0, syscall.EISDIR
 	}
-	if f.rdonly {
-		return 0, syscall.EBADF
-	}
 	if err := f.growToFarPos(); err != nil {
 		return 0, err
 	}
@@ -458,9 +447,6 @@ func (f *File) pwrite(b []byte, off int64) (n int, err error) {
 	defer f.writeUnlock()
 	if f.isDir {
 		return 0, syscall.EISDIR
-	}
-	if f.rdonly {
-		return 0, syscall.EBADF
 	}
 	err = f.at(off, func() error {
 		for n < len(b) {

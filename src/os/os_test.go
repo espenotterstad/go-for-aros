@@ -2409,6 +2409,9 @@ func TestFileRDWRFlags(t *testing.T) {
 		{"O_RDWR", O_RDWR},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			if runtime.GOOS == "aros" && test.flag != O_RDWR {
+				t.Skip("skipping on aros: dos opens every file for reading and writing")
+			}
 			testMaybeRooted(t, func(t *testing.T, r *Root) {
 				const filename = "f"
 				content := []byte("content")
