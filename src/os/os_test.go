@@ -1337,13 +1337,18 @@ func TestFTruncate(t *testing.T) {
 	checkSize(t, f, 0)
 	_, err := f.Write([]byte("surprise!"))
 	if err == nil {
-		checkSize(t, f, 13+9) // wrote at offset past where hello, world was.
+		if runtime.GOOS == "aros" {
+			// dos moves a position past the new end to it.
+			checkSize(t, f, 9)
+		} else {
+			checkSize(t, f, 13+9) // wrote at offset past where hello, world was.
+		}
 	}
 }
 
 func TestTruncate(t *testing.T) {
 	if runtime.GOOS == "aros" {
-		t.Skip("skipping on aros: ram-handler moves another handle's position back to the new end")
+		t.Skip("skipping on aros: SetFileSize moves another handle's position past the new end to it (not on SYS:)")
 	}
 	t.Parallel()
 

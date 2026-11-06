@@ -33,7 +33,6 @@ type file struct {
 	dirinfo    atomic.Pointer[dirInfo] // nil unless directory being read
 	appendMode bool                    // whether file is opened for appending
 	rdonly     bool                    // opened O_RDONLY: Truncate gives EINVAL (Read and Write go to dos, go/HANDOFF.md D41)
-	farPos     int64                   // a position past the end that dos refused (seek), else 0
 }
 
 // fd is the AROS implementation of Fd: the dos handle, or the lock of a
@@ -237,7 +236,8 @@ func (f *File) Stat() (FileInfo, error) {
 }
 
 // Truncate changes the size of the file.
-// It does not change the I/O offset.
+// It does not change the I/O offset, except that dos moves an offset past
+// the new end to the end, on every handle of the file (go/HANDOFF.md D40).
 // If there is an error, it will be of type [*PathError].
 func (f *File) Truncate(size int64) error {
 	if f == nil {
@@ -254,64 +254,11 @@ func (f *File) Truncate(size int64) error {
 	case f.rdonly:
 		err = syscall.EINVAL // not open for writing, as ftruncate says
 	default:
-		err = f.truncate(size)
+		err = syscall.Ftruncate(f.sysfd, size)
 	}
 	if err != nil {
 		return &PathError{Op: "truncate", Path: f.name, Err: err}
 	}
-	return nil
-}
-
-// truncate sets the size, keeping the position: one past the new end
-// (ram-handler moves it back to the end, go/HANDOFF.md F24b) becomes
-// farPos, and a farPos the file now reaches is dos's position again.
-func (f *File) truncate(size int64) error {
-	cur := f.farPos
-	if cur == 0 {
-		var err error
-		if cur, err = syscall.Seek(f.sysfd, 0, io.SeekCurrent); err != nil {
-			return err
-		}
-	}
-	if err := syscall.Ftruncate(f.sysfd, size); err != nil {
-		return err
-	}
-	if cur > size {
-		f.farPos = cur
-		_, err := syscall.Seek(f.sysfd, 0, io.SeekEnd)
-		return err
-	}
-	f.farPos = 0
-	_, err := syscall.Seek(f.sysfd, cur, io.SeekStart)
-	return err
-}
-
-// pastEnd reports whether farPos is still past the end. A farPos the file
-// reaches now (WriteAt, another handle) is dos's position again.
-func (f *File) pastEnd() bool {
-	if f.farPos == 0 {
-		return false
-	}
-	if _, err := syscall.Seek(f.sysfd, f.farPos, io.SeekStart); err != nil {
-		return true // dos refused it and kept its position
-	}
-	f.farPos = 0
-	return false
-}
-
-// growToFarPos makes the file reach farPos before a write there, as Unix
-// does (dos fills the new bytes with zeros), and seeks to it.
-func (f *File) growToFarPos() error {
-	if f.farPos == 0 || f.appendMode || !f.pastEnd() {
-		return nil
-	}
-	if err := syscall.Ftruncate(f.sysfd, f.farPos); err != nil {
-		return err
-	}
-	if _, err := syscall.Seek(f.sysfd, f.farPos, io.SeekStart); err != nil {
-		return err
-	}
-	f.farPos = 0
 	return nil
 }
 
@@ -356,9 +303,6 @@ func (f *File) read(b []byte) (n int, err error) {
 	defer f.readUnlock()
 	if f.isDir {
 		return 0, syscall.EISDIR
-	}
-	if f.pastEnd() {
-		return 0, io.EOF
 	}
 	n, e := syscall.Read(f.sysfd, b)
 	if n == 0 && len(b) > 0 && e == nil {
@@ -420,9 +364,6 @@ func (f *File) write(b []byte) (n int, err error) {
 	if f.isDir {
 		return 0, syscall.EISDIR
 	}
-	if err := f.growToFarPos(); err != nil {
-		return 0, err
-	}
 	for n < len(b) {
 		m, err := syscall.Write(f.sysfd, b[n:])
 		n += m
@@ -464,7 +405,8 @@ func (f *File) pwrite(b []byte, off int64) (n int, err error) {
 // seek sets the offset for the next Read or Write on file to offset, interpreted
 // according to whence: 0 means relative to the origin of the file, 1 means
 // relative to the current offset, and 2 means relative to the end.
-// It returns the new offset and an error, if any. A directory can only go
+// It returns the new offset and an error, if any. An offset past the end
+// fails, as dos's Seek does (go/HANDOFF.md D40). A directory can only go
 // back to its start (to read it again).
 func (f *File) seek(offset int64, whence int) (ret int64, err error) {
 	if err := f.incref(""); err != nil {
@@ -480,42 +422,7 @@ func (f *File) seek(offset int64, whence int) (ret int64, err error) {
 		}
 		return 0, nil
 	}
-	if whence == io.SeekCurrent && f.farPos > 0 {
-		offset, whence = f.farPos+offset, io.SeekStart
-	}
-	ret, err = syscall.Seek(f.sysfd, offset, whence)
-	if err == nil {
-		f.farPos = 0
-		return ret, nil
-	}
-	return f.seekPastEnd(offset, whence, err)
-}
-
-// seekPastEnd handles a seek dos refused: a position past the end becomes
-// farPos, with dos's position at the end, and the next write grows the file
-// to it (growToFarPos); any other position gives err.
-func (f *File) seekPastEnd(offset int64, whence int, err error) (int64, error) {
-	cur, e := syscall.Seek(f.sysfd, 0, io.SeekCurrent)
-	if e != nil {
-		return 0, err
-	}
-	end, e := syscall.Seek(f.sysfd, 0, io.SeekEnd)
-	if e != nil {
-		return 0, err
-	}
-	pos := offset
-	switch whence {
-	case io.SeekCurrent:
-		pos += cur
-	case io.SeekEnd:
-		pos += end
-	}
-	if pos <= end || pos != int64(int32(pos)) {
-		syscall.Seek(f.sysfd, cur, io.SeekStart)
-		return 0, err
-	}
-	f.farPos = pos
-	return pos, nil
+	return syscall.Seek(f.sysfd, offset, whence)
 }
 
 // Truncate changes the size of the named file.
