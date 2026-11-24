@@ -84,9 +84,9 @@ const (
 	_GVF_BINARY_VAR                 = 1024
 	_LV_VAR                         = 0
 	_LVF_IGNORE                     = 128
-	_Process_pr_CES                 = 488
-	_Process_pr_CurrentDir          = 344
-	_Process_pr_LocalVars           = 456
+	_Process_pr_CES                 = 472
+	_Process_pr_CurrentDir          = 328
+	_Process_pr_LocalVars           = 440
 	_Node_ln_Succ                   = 0
 	_Node_ln_Type                   = 16
 	_Node_ln_Name                   = 24

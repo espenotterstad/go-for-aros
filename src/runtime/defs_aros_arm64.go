@@ -55,7 +55,7 @@ const (
 	_Task_tc_SPUpper       = 112
 	_Task_tc_TrapCode      = 88
 	_ExceptionContext_pc   = 256
-	_Process_pr_CES        = 488
+	_Process_pr_CES        = 472
 	_TICKS_PER_SECOND      = 50
 	_IORequest_io_Unit     = 56
 	_IORequest_io_Command  = 64
@@ -64,9 +64,9 @@ const (
 	_MsgPort_mp_SigBit     = 33
 	_Task_tc_Flags         = 32
 	_TF_STACKCHK           = 16
-	_Process_pr_CurrentDir = 344
-	_Process_pr_WindowPtr  = 408
-	_Process_pr_LocalVars  = 456
+	_Process_pr_CurrentDir = 328
+	_Process_pr_WindowPtr  = 392
+	_Process_pr_LocalVars  = 440
 	_Locale_loc_GMTOffset  = 112
 	_ExceptionContext_x28  = 224
 	_ExceptionContext_fp   = 232
